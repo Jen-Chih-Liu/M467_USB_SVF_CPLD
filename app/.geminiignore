@@ -1,0 +1,45 @@
+# ==========================================
+# Keil MDK 專案 .geminiignore 模板
+# ==========================================
+
+# 1. 輸出目錄 (通常包含編譯過程檔與最終產物)
+Objects/
+Listings/
+Debug/
+Release/
+Output/
+
+# 2. 編譯過程與中介檔案 (浪費 Token 且無助於理解邏輯)
+*.o
+*.d
+*.crf
+*.lnp
+*.axf
+*.htm
+*.dep
+*.sct
+*.map
+
+# 3. 韌體二進制檔案 (AI 無法直接閱讀)
+*.hex
+*.bin
+*.elf
+*.out
+
+# 4. Keil IDE 使用者介面與除錯設定檔 (避免干擾程式碼分析)
+*.uvoptx
+*.uvguix.*
+*.Scvd
+*.ini
+JLinkLog.txt
+*.bak
+*.tmp
+
+# 5. 常見的編輯器與系統快取 (例如使用 VS Code 編輯 Keil 專案)
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 6. 版本控制系統資料夾
+.git/
+.svn/

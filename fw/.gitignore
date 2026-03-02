@@ -1,0 +1,43 @@
+# Keil uVision Project Files
+############################
+obj/
+lst/
+RTE/
+*.plg
+*.scvd
+*.bak
+*.htm
+*.sfr
+*.map
+*.tra
+*.d
+*.o
+*.obj
+*.lst
+*.axf
+*.elf
+*.bin
+*.hex
+
+# User-specific files
+*.uvgui.*
+
+# Visual Studio
+################
+
+# User-specific files
+*.user
+*.suo
+*.sln.docstates
+
+# IDE cache
+.vs/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Rr]elease/
+[Dd]ebug/

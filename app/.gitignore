@@ -1,0 +1,16 @@
+# Visual Studio
+################
+
+# User-specific files
+*.user
+*.suo
+*.sln.docstates
+
+# IDE cache
+.vs/
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Rr]elease/
+[Dd]ebug/
