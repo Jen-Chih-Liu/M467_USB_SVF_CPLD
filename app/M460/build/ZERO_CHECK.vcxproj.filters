@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\jcliu\Desktop\gitm476cpld\M467_USB_SVF_CPLD\app\M460\build\CMakeFiles\6b5c6a0b6e0ab442c35e8869cfd3d246\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{9FEAFBF5-8FF1-3528-B66C-1E506066ED61}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

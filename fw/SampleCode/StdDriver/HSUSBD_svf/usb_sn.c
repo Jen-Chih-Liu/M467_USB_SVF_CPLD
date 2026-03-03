@@ -3,8 +3,8 @@
 #include <string.h>
 #include "g_def.h"
 uint8_t g_u8StringSerial[USB_SERIAL_STR_LEN] __attribute__((aligned(4))) =
-// USB String Descriptor for the Serial Number.
-// The first two bytes are the header (bLength, bDescriptorType).
+    // USB String Descriptor for the Serial Number.
+    // The first two bytes are the header (bLength, bDescriptorType).
 {
     USB_SERIAL_STR_LEN, // bLength
     0x03                // bDescriptorType (STRING)

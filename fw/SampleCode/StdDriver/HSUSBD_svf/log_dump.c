@@ -200,7 +200,7 @@ void UART3_IRQHandler(void)
     uint32_t u32IntSts = UART3->INTSTS;
 
     // Check if the interrupt is for received data available.
-    if(u32IntSts & UART_INTSTS_RDAINT_Msk)
+    if (u32IntSts & UART_INTSTS_RDAINT_Msk)
     {
 
         // Read all available bytes from the RX FIFO.
@@ -230,13 +230,14 @@ void UART3_IRQHandler(void)
                 // This handles cases like "dumdumplog" correctly.
                 if (u8RxData == CMD_DUMPLOG[0])
                 {
-                    u8CmdIndex = 1; 
+                    u8CmdIndex = 1;
                 }
                 else
                 {
                     u8CmdIndex = 0;
                 }
             }
+
             // --- End of state machine ---
         }
 

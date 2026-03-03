@@ -1,4 +1,4 @@
-//goble define 
+//goble define
 #define USB_SERIAL_STR_LEN  50
 
 
@@ -57,6 +57,17 @@
 #define nvme_slot_3 0x160
 #define nvme_slot_4 0x180
 #define nvme_slot_5 0x1a0
+#define nvme_slot_6 0x1c0
+#define nvme_slot_7 0x1e0
+#define nvme_slot_8 0x200
+#define nvme_slot_9 0x220
+#define nvme_slot_10 0x240
+#define nvme_slot_11 0x260
+#define nvme_slot_12 0x280
+#define nvme_slot_13 0x2a0
+#define nvme_slot_14 0x2c0
+#define nvme_slot_15 0x2e0
+
 extern volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) ;
 extern volatile uint8_t g_u8DumpLogFlag;
 extern void tempersensor_read(void);
@@ -64,8 +75,11 @@ extern void fan_read(void);
 extern void CPLD_read(void);
 extern void CPLD_read_AFTER(void);
 extern void fan_inital(void);
+extern int FanIC_BackupRegisters(void);
 extern void Set_USB_SerialNumber_From_UID(void);
 extern void nvm_mi_read(void);
 extern float show_temperature(uint8_t h_bytem, uint8_t l_byte);
 extern void show_cpld_information(uint8_t *p_buf);
 extern void print_nvme_basic_management_info(uint8_t *data);
+extern int FanIC_Backup_init(void);
+extern int FanIC_CompareAndRestore(void);

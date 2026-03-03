@@ -1,6 +1,5 @@
 # Keil uVision Project Files
 ############################
-obj/
 lst/
 RTE/
 *.plg
@@ -16,7 +15,6 @@ RTE/
 *.lst
 *.axf
 *.elf
-*.bin
 *.hex
 
 # User-specific files

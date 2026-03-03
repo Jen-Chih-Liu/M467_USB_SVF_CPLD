@@ -358,7 +358,7 @@ int do_hdd_info(int count, int argc, char* argv[]) {
 
     // 2. Create JSON root object
     cJSON* root = cJSON_CreateObject();
-    int total_slots = 6;
+    int total_slots = boardInfo.hdd_amount;
     cJSON_AddNumberToObject(root, "NVMECount", total_slots);
 
     // 3. Prepare pointer array
@@ -368,7 +368,17 @@ int do_hdd_info(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_2,
         boardInfo.nvme_slot_3,
         boardInfo.nvme_slot_4,
-        boardInfo.nvme_slot_5
+        boardInfo.nvme_slot_5,
+        boardInfo.nvme_slot_6,
+        boardInfo.nvme_slot_7,
+        boardInfo.nvme_slot_8,
+        boardInfo.nvme_slot_9,
+        boardInfo.nvme_slot_10,
+        boardInfo.nvme_slot_11,
+        boardInfo.nvme_slot_12,
+        boardInfo.nvme_slot_13,
+        boardInfo.nvme_slot_14,
+        boardInfo.nvme_slot_15,
     };
 
     char key_buf[16];
@@ -643,14 +653,24 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
         cJSON_Delete(root);
         return -1;
     }
-    int total_slots = 6;
+    int total_slots = boardInfo.hdd_amount;;
     uint8_t* slot_ptrs[] = {
      boardInfo.nvme_slot_0,
      boardInfo.nvme_slot_1,
      boardInfo.nvme_slot_2,
      boardInfo.nvme_slot_3,
      boardInfo.nvme_slot_4,
-     boardInfo.nvme_slot_5
+     boardInfo.nvme_slot_5,
+     boardInfo.nvme_slot_6,
+     boardInfo.nvme_slot_7,
+             boardInfo.nvme_slot_8,
+        boardInfo.nvme_slot_9,
+        boardInfo.nvme_slot_10,
+        boardInfo.nvme_slot_11,
+        boardInfo.nvme_slot_12,
+        boardInfo.nvme_slot_13,
+        boardInfo.nvme_slot_14,
+        boardInfo.nvme_slot_15,
     };
 
     // 2. Create JSON object
@@ -1046,7 +1066,7 @@ int handle_reset(int count, int argc, char* argv[]) {
     
     if (argc == 3 && STR_EQUAL(argv[0], "Reset") && STR_EQUAL(argv[1], "Setval")) {
         // Value should be in argv[2]
-        unsigned char temp = strtoul(argv[2], NULL, 16);
+        unsigned char temp = (unsigned char)strtoul(argv[2], NULL, 16);
         int is_success = 1;
         if (usb_multi_mcu_reset_set_var(count,temp) == 0)
             is_success = 1;

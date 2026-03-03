@@ -94,7 +94,7 @@ void SYS_Init(void)
     /* Enable I2C0 clock */
     CLK_EnableModuleClock(I2C0_MODULE);
     CLK_EnableModuleClock(I2C1_MODULE);
-
+    CLK_EnableModuleClock(I2C4_MODULE);
     CLK_EnableModuleClock(TMR0_MODULE);
 
     CLK_SetModuleClock(TMR0_MODULE, CLK_CLKSEL1_TMR0SEL_HXT, 0);
@@ -116,6 +116,13 @@ void SYS_Init(void)
     SET_I2C1_SCL_PB1();
     PB->SMTEN |= GPIO_SMTEN_SMTEN0_Msk | GPIO_SMTEN_SMTEN1_Msk ;
 
+
+
+    SET_I2C4_SDA_PF4();
+    SET_I2C4_SCL_PF5();
+    PF->SMTEN |= GPIO_SMTEN_SMTEN4_Msk | GPIO_SMTEN_SMTEN5_Msk ;
+
+
     /* Lock protected registers */
 
     SystemCoreClockUpdate();
@@ -135,9 +142,159 @@ void I2C0_Init(void)
 
     /* Get I2C0 Bus Clock */
     printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C0));
-
-
 }
+
+
+void I2C4_Init(void)
+{
+
+    /* Open I2C0 and set clock to 100k */
+    I2C_Open(I2C4, 100000);
+
+    /* Get I2C0 Bus Clock */
+    printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
+	
+	
+		I2C_SetSlaveAddr(I2C4, 0, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
+    I2C_SetSlaveAddr(I2C4, 1, 0x46, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+    
+    I2C_EnableInt(I2C4);
+    NVIC_EnableIRQ(I2C4_IRQn);
+}
+typedef void (*I2C_FUNC)(uint32_t u32Status);
+static I2C_FUNC s_I2C4HandlerFn = NULL;
+
+
+
+
+void I2C4_IRQHandler(void)
+{
+    uint32_t u32Status;
+
+    u32Status = I2C_GET_STATUS(I2C4);
+
+    if(I2C_GET_TIMEOUT_FLAG(I2C4))
+    {
+        /* Clear I2C4 Timeout Flag */
+        I2C_ClearTimeoutFlag(I2C4);
+        //g_u8TimeoutFlag = 1;
+    }
+    else
+    {
+        if(s_I2C4HandlerFn != NULL)
+            s_I2C4HandlerFn(u32Status);
+    }
+}
+
+volatile unsigned char fan_address_index=0;
+volatile unsigned char fan_reg_index=0;
+volatile unsigned char fan_address_0x44[0xff]={0};
+volatile unsigned char fan_address_0x46[0xff]={0};
+volatile unsigned char g_au8SlvData[32]={0};
+volatile uint8_t g_u8SlvDataLen = 0;
+volatile uint8_t g_u8SlvTRxAbortFlag = 0;
+void I2C_SlaveTRx(uint32_t u32Status)
+{
+    uint8_t u8data;
+    if(u32Status == 0x60)                       /* Own SLA+W has been receive; ACK has been return */
+    {
+        g_u8SlvDataLen = 0;
+        fan_address_index=I2C_GET_DATA(I2C4)>>1;
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else if(u32Status == 0x80)                 /* Previously address with own SLA address
+                                                   Data has been received; ACK has been returned*/
+    {
+        u8data = (unsigned char) I2C_GET_DATA(I2C4);
+
+        g_au8SlvData[g_u8SlvDataLen++] = u8data;
+                
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else if(u32Status == 0xA8)                  /* Own SLA+R has been receive; ACK has been return */
+    {
+        fan_address_index=I2C_GET_DATA(I2C4)>>1;
+        if (fan_address_index==(0x44>>1))
+        {           
+            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);        
+        } 
+        else if (fan_address_index==(0x46>>1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
+        }
+        fan_reg_index++;
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else if(u32Status == 0xB8)                  /* Data byte in I2CDAT has been transmitted ACK has been received */
+    {
+         if (fan_address_index==(0x44>>1))
+        {           
+            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);        
+        } 
+        else if (fan_address_index==(0x46>>1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
+        }
+        fan_reg_index++;
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
+    }
+    else if(u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
+                                                   Not ACK has been received */
+    {
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else if(u32Status == 0x88)                 /* Previously addressed with own SLA address; NOT ACK has
+                                                   been returned */
+    {
+        g_u8SlvDataLen = 0;
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else if(u32Status == 0xA0)                 /* A STOP or repeated START has been received while still
+                                             addressed as Slave/Receiver*/
+    {
+        if (g_u8SlvDataLen==3)
+        {
+            if (fan_address_index==(0x44>>1))
+            {
+                fan_address_0x44[g_au8SlvData[0]]=g_au8SlvData[1];
+                fan_address_0x44[g_au8SlvData[0]+1]=g_au8SlvData[2];
+            }
+            else if (fan_address_index==(0x46>>1))
+            {
+                fan_address_0x46[g_au8SlvData[0]]=g_au8SlvData[1];
+                fan_address_0x46[g_au8SlvData[0]+1]=g_au8SlvData[2];
+            }   
+        }
+            else if (g_u8SlvDataLen==1)
+            {
+                fan_reg_index = g_au8SlvData[0];
+            }
+        
+        g_u8SlvDataLen = 0;
+        I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    }
+    else
+    {
+        printf("[SlaveTRx] Status [0x%x] Unexpected abort!!\n", u32Status);
+        if(u32Status == 0x68)               /* Slave receive arbitration lost, clear SI */
+        {
+            I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
+        }
+        else if(u32Status == 0xB0)          /* Address transmit arbitration lost, clear SI  */
+        {
+            I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
+        }
+        else                                /* Slave bus error, stop I2C and clear SI */
+        {
+            I2C_SET_CONTROL_REG(I2C4, I2C_CTL_STO_SI);
+            I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI);
+        }
+        g_u8SlvTRxAbortFlag = 1;
+    }
+    I2C_WAIT_SI_CLEAR(I2C4);
+}
+
+
 
 /**
  * @brief  I2C1 Interface Initialization.
@@ -185,10 +342,10 @@ int main(void)
     SYS_Init();
 
     /* Init UART to 115200-8n1 for print message */
-	UART_Open(UART3, 115200);
-	  GPIO_SetPullCtl(PB, BIT14, GPIO_PUSEL_PULL_UP);
-	
-	  NVIC_EnableIRQ(UART3_IRQn);
+    UART_Open(UART3, 115200);
+    GPIO_SetPullCtl(PB, BIT14, GPIO_PUSEL_PULL_UP);
+
+    NVIC_EnableIRQ(UART3_IRQn);
     UART_EnableInt(UART3, UART_INTEN_RDAIEN_Msk);
     // Generate a unique USB serial number from the MCU's UID.
     Set_USB_SerialNumber_From_UID();
@@ -224,7 +381,6 @@ int main(void)
     I2C0_Init();
     I2C1_Init();
 
-
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
     response_buff[0] = 0;
@@ -245,8 +401,13 @@ int main(void)
     TIMER_EnableInt(TIMER0);
     NVIC_EnableIRQ(TMR0_IRQn);
     TIMER_Start(TIMER0);
-		// Initialize the fan controller.
-		fan_inital();
+    // Initialize the fan controller.
+    fan_inital();
+    FanIC_Backup_init();
+    I2C4_Init();
+    s_I2C4HandlerFn = I2C_SlaveTRx;
+    I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+        
     // Main application loop.
     while (1)
     {
@@ -254,36 +415,45 @@ int main(void)
         // Periodic task executed every 500ms.
         if (timer0_count > 500)
         {
-					#if 1
+#if 1
+
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
+                FanIC_BackupRegisters();
+                FanIC_CompareAndRestore();
                 CPLD_read();          // Read CPLD status.
-                fan_read();           // Read fan speed and duty cycle.
-							  tempersensor_read();  // Read temperature sensor.
-								nvm_mi_read();        // Read NVMe drive information.
+                //fan_read();           // Read fan speed and duty cycle.
+                tempersensor_read();  // Read temperature sensor.
+                nvm_mi_read();        // Read NVMe drive information.
             }
-						
-					
+
+
 #endif
             timer0_count = 0;
         }
 
+
+
+
         // If the "dumplog" command is received via UART, print all collected data.
-        if (g_u8DumpLogFlag ==1)
+        if (g_u8DumpLogFlag == 1)
         {
 #if 1
             printf("temperature sensor read %f celsius\n\r",
-            show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
+                   show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
             show_cpld_information(&bmc_report[0]);
             uint8_t nvme_i;
+
             // Loop through all detected NVMe drives and print their information.
-            for(nvme_i = 0; nvme_i < bmc_report[cpld_hdd_amount]; nvme_i++)
+            for (nvme_i = 0; nvme_i < bmc_report[cpld_hdd_amount]; nvme_i++)
             {
                 // The hardware supports up to 16 drives. Stop if index goes beyond.
                 if (nvme_i >= 16) break;
+
                 print_nvme_basic_management_info(&bmc_report[NVME_MEM_OFFSET + (nvme_i * NVME_READ_COUNT)]);
             }
+
 #endif
             g_u8DumpLogFlag = 0;
         }
@@ -387,9 +557,9 @@ int main(void)
 
             // Command 0xb1: Boot to LDROM for ISP (In-System Programming).
             if ((usb_rcvbuf[0] == 0xb1)
-							 &&(usb_rcvbuf[1] == 0x5a)
-						   &&(usb_rcvbuf[2] == 0xa5)
-						)
+                    && (usb_rcvbuf[1] == 0x5a)
+                    && (usb_rcvbuf[2] == 0xa5)
+               )
             {
                 SYS_UnlockReg();
                 outpw(&SYS->RSTSTS, 3);//clear bit
@@ -403,9 +573,9 @@ int main(void)
 
             // Command 0xb2: Perform a chip reset and boot from APROM (normal operation).
             if ((usb_rcvbuf[0] == 0xb2)
-						&&	(usb_rcvbuf[1] == 0x55)
-						&&  (usb_rcvbuf[2] == 0xaa)
-						)
+                    && (usb_rcvbuf[1] == 0x55)
+                    && (usb_rcvbuf[2] == 0xaa)
+               )
             {
                 SYS_UnlockReg();
                 /* Enable ISP */
@@ -415,42 +585,24 @@ int main(void)
                 FMC_SetVectorPageAddr(FMC_APROM_BASE);
                 NVIC_SystemReset();
             }
-						// Command 0xb2, subcommand 0x5a: Set the reset variable.
+
+            // Command 0xb2, subcommand 0x5a: Set the reset variable.
             if ((usb_rcvbuf[0] == 0xb2)
-						&&	(usb_rcvbuf[1] == 0x5a)						
-						)
+                    && (usb_rcvbuf[1] == 0x5a)
+               )
             {
-                reset_var=usb_rcvbuf[2];
+                reset_var = usb_rcvbuf[2];
             }
-						
-				// Command 0xb2, subcommand 0x6a: Get the reset variable.
-				if ((usb_rcvbuf[0] == 0xb2)
-						&&	(usb_rcvbuf[1] == 0x6a)						
-						)
-				{
-						 response_buff[0] = 0xb2;
-             response_buff[1] = reset_var;
 
- 
+            // Command 0xb2, subcommand 0x6a: Get the reset variable.
+            if ((usb_rcvbuf[0] == 0xb2)
+                    && (usb_rcvbuf[1] == 0x6a)
+               )
+            {
+                response_buff[0] = 0xb2;
+                response_buff[1] = reset_var;
 
-                for (i = 0; i < 1024; i++)
-                {
-                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
-                }
 
-                HSUSBD->EP[EPA].EPTXCNT = 1024;
-                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
-							}
-
-					// Command 0xb3: Get LED GPIO pin definitions.
-					if ((usb_rcvbuf[0] == 0xb3)
-						
-						)
-				{
-						 response_buff[0] = 0xb3;
-             response_buff[1] = GLED_AMB_N_R;
-						 response_buff[2] = GLED_GRN_N_R;
- 
 
                 for (i = 0; i < 1024; i++)
                 {
@@ -459,9 +611,28 @@ int main(void)
 
                 HSUSBD->EP[EPA].EPTXCNT = 1024;
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
-							}
-							
-							
+            }
+
+            // Command 0xb3: Get LED GPIO pin definitions.
+            if ((usb_rcvbuf[0] == 0xb3)
+
+               )
+            {
+                response_buff[0] = 0xb3;
+                response_buff[1] = GLED_AMB_N_R;
+                response_buff[2] = GLED_GRN_N_R;
+
+
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+            }
+
+
 #endif
 
             // Command 0xc0: Read all BMC report data.
@@ -600,13 +771,15 @@ int main(void)
             if (usb_rcvbuf[0] == 0xda)
             {
                 i2c_monitor_flag = usb_rcvbuf[1];
-							  printf("mf=0x%x\n\r",i2c_monitor_flag);
-				#if 0			  
-				if(i2c_monitor_flag==1) 
-								{
-								 CPLD_read_AFTER();   
-								}
-				#endif 
+                printf("mf=0x%x\n\r", i2c_monitor_flag);
+#if 0
+
+                if (i2c_monitor_flag == 1)
+                {
+                    CPLD_read_AFTER();
+                }
+
+#endif
             }
 
 
