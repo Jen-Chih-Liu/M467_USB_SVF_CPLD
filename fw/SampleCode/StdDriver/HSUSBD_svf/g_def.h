@@ -83,3 +83,5 @@ extern void show_cpld_information(uint8_t *p_buf);
 extern void print_nvme_basic_management_info(uint8_t *data);
 extern int FanIC_Backup_init(void);
 extern int FanIC_CompareAndRestore(void);
+extern void EEPROM_WriteData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len);
+extern void EEPROM_ReadData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len);

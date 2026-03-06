@@ -1647,3 +1647,121 @@ int usbd_multi_mcu_start_bmc_monitor(unsigned char usb_cnt)
     libusb_exit(ctx);
     return (r == 0) ? 0 : 1;
 }
+
+
+
+/**
+ * @brief Writes data to MCU's EEPROM from a binary file.
+ * 
+ * This function reads up to 256 bytes from a specified file and writes it to
+ * the target MCU's EEPROM using USB HID command 0xC1. The buffer is pre-filled
+ * with 0xFF, and only the bytes read from the file will overwrite these values.
+ * 
+ * @param usb_cnt Logical device index (0-based).
+ * @param filename Path to the binary file to be written to EEPROM.
+ * @return int 0 on success, 1 on failure, RES_FILE_NO_FOUND if file not found,
+ *         RES_FILE_SIZE_OVER if file exceeds 256 bytes.
+ */
+int usbd_multi_mcu_eeprom_write(unsigned char usb_cnt, char* filename )
+{
+    unsigned char  W_EEPROM_BUFFER[256];
+unsigned int loc_file_size;
+    FILE* fp;
+    
+    // Initialize file size counter
+    loc_file_size = 0;
+    
+    // Pre-fill EEPROM buffer with 0xFF (default erased state)
+    for (unsigned int i = 0; i < 256; i++)
+    {
+        W_EEPROM_BUFFER[i] = 0xff;
+    }
+    
+    // Attempt to open the binary file for reading
+    if ((fp = fopen(filename, "rb")) == NULL)
+    {
+        dbg_printf("APROM FILE OPEN FALSE\n\r");
+        return RES_FILE_NO_FOUND;
+    }
+    
+    // Read file content into buffer
+    if (fp != NULL)
+    {
+        // Fix for reading file size correctly
+        fseek(fp, 0, SEEK_END);
+        loc_file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        
+        // Validate file size doesn't exceed EEPROM capacity
+        if (loc_file_size > 256) {
+            fclose(fp);
+            return RES_FILE_SIZE_OVER;
+        }
+        
+        // Read file data into buffer
+        fread(W_EEPROM_BUFFER, 1, loc_file_size, fp);
+        fclose(fp);
+    }
+
+    // === USB Communication Setup ===
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    // Initialize libusb library
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    // Retrieve global device list
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    // Scan and update internal device map
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+   // Check if any devices were found
+   if (g_device_count == 0) {
+        return 1;
+    }
+    
+    r = -1;
+    
+    // Verify the requested device index is valid
+    if (g_device_count > usb_cnt)
+    {
+        // Open the specific device and retrieve endpoints
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            int actual_length = 0;
+            char cmd_eeprom_write[PACKET_SIZE] = { 0 };
+            
+            // Prepare command packet: Copy EEPROM data starting at byte[1]
+            for (int i = 0; i < 256; i++)
+            {
+                cmd_eeprom_write[1 + i] = W_EEPROM_BUFFER[i];
+            }
+            
+            // Set command byte for EEPROM write operation
+            cmd_eeprom_write[0] = (char)0xc1; // EEPROM write command prefix
+
+            // Execute USB interrupt transfer to send EEPROM write command
+            r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_write, PACKET_SIZE, &actual_length, 0); 
+            
+            // Release interface and close device handle
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+    
+    // Clean up resources
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}

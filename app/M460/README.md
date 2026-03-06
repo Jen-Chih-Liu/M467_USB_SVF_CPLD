@@ -42,7 +42,7 @@ A cross-platform command-line utility for managing Nuvoton MCU-based systems, pr
 ```bash
 mkdir build && cd build
 cmake ..
-make
+cmake --build .
 ```
 
 ## 💻 Usage
@@ -61,6 +61,7 @@ M460.exe <Count> <Command> <SubCommand> [Arguments...]
 | **Discovery** | `usblist` | List all connected devices with Logical IDs. |
 | **MCU Update**| `Update M463 firmware.bin` | Start MCU ISP programming. |
 | **CPLD Update**| `Update CPLD logic.svf` | Start CPLD SVF programming. |
+| **EEPROM** | `EEPROM WRITE eeprom.bin` | Write binary data to MCU internal EEPROM (256 bytes max). |
 | **HDD Info** | `HDD Info` / `HDD Temp` | Show drive details or temperature in JSON. |
 | **Fan Control**| `FAN Duty Set 50` | Set all fans to 50% duty cycle. |
 | **Thermal** | `BPB Sensor Get` | Read system ambient temperature. |

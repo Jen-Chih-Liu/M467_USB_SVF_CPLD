@@ -106,6 +106,8 @@ extern int cpld_svf_update(unsigned char usb_cnt, char* svf_file, char* fail_rea
 extern int usbd_multi_mcu_stop_bmc_monitor(unsigned char usb_cnt);
 extern int usbd_multi_mcu_start_bmc_monitor(unsigned char usb_cnt);
 extern void print_nvme_basic_management_info(uint8_t* data);
+extern int usbd_multi_mcu_eeprom_write(unsigned char usb_cnt, char* filename );
+
 extern void sleep_seconds(double seconds);
 typedef struct {
     libusb_device* device; // Stores device pointer for direct opening

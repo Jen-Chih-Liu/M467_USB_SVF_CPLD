@@ -1,3 +1,25 @@
+/**
+ * @file M460.c
+ * @brief Command-line interface for M460/M463 MCU-based system management and control.
+ * 
+ * This is the main entry point for a CLI tool that provides comprehensive control over
+ * an embedded system featuring:
+ * - M460/M463 MCU firmware management (ISP updates)
+ * - CPLD configuration and programming (SVF format)
+ * - NVMe/SSD drive monitoring and control
+ * - Fan speed and temperature monitoring
+ * - I2C device communication and bypass
+ * - System reset and configuration
+ * 
+ * The architecture uses a command dispatch table pattern where each top-level command
+ * (CPLD, HDD, FAN, etc.) has its own handler function. Responses are formatted as JSON
+ * for easy integration with automation scripts and UI tools.
+ * 
+ * Command Format: M460 <USBIndex> <Command> [SubCmd] [Args...]
+ * Example: M460 0 CPLD Version
+ *          M460 1 HDD Info
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,11 +33,15 @@
 #endif
 
 #include "config.h"
-// ---------------------------------------------------------
-// 1. Basic Definitions and Helpers
-// ---------------------------------------------------------
+// =============================================================================
+// 1. Basic Definitions and Helper Macros
+// =============================================================================
 
-// Cross-platform case-insensitive comparison
+/**
+ * @brief Cross-platform case-insensitive string comparison macro.
+ * 
+ * Uses _stricmp on Windows and strcasecmp on POSIX systems.
+ */
 #ifdef _WIN32
 #define STR_EQUAL(a, b) (_stricmp((a), (b)) == 0)
 #else
@@ -24,29 +50,63 @@
 #endif
 
 #include "cJSON.h"
+
+/**
+ * @brief Converts duty cycle percentage (0-100) to 8-bit register value (0-255).
+ * 
+ * Formula: (Duty% * 255 + 50) / 100
+ * The +50 provides rounding for integer division.
+ */
 #define DUTY_TO_REG8(_DUTY_)  (uint8_t)((((uint32_t)(_DUTY_) * 255UL) + 50UL) / 100UL)
 
-// Define Function Pointer type
-// count: The <Count> parameter from the command line
-// argc, argv: Remaining arguments passed to the Handler for sub-command processing (e.g., "Id", "Version")
+/**
+ * @brief Function pointer type for command handlers.
+ * 
+ * @param count USB device index (0-based)
+ * @param argc Number of remaining arguments
+ * @param argv Array of remaining argument strings
+ * @return int 0 on success, non-zero on failure
+ */
 typedef int (*cmd_handler_t)(int count, int argc, char* argv[]);
 
-// Define command table structure
+/**
+ * @brief Structure defining a command table entry.
+ * 
+ * Used to build dispatch tables for command routing.
+ */
 typedef struct {
     const char* name;       // Command name (e.g., "CPLD", "HDD")
     cmd_handler_t handler;  // Corresponding handler function
-    const char* help;       // Help text
+    const char* help;       // Help text description
 } cmd_entry_t;
 
-// ---------------------------------------------------------
-// 2. Implementation of Specific Handlers
-// ---------------------------------------------------------
+// =============================================================================
+// 2. Command Handler Implementations
+// =============================================================================
 
-// --- Group A: CPLD Related Processing ---
+// -----------------------------------------------------------------------------
+// Group A: CPLD (Complex Programmable Logic Device) Related Commands
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Handles all CPLD-related commands (Id, Version, Get, Set).
+ * 
+ * Sub-commands:
+ * - Id: Read CPLD JTAG ID via USB
+ * - Version: Read CPLD firmware version
+ * - Get <Reg> <Len>: Read I2C registers from CPLD
+ * - Set <Reg> <Val>: Write value to CPLD I2C register
+ * 
+ * All responses are formatted as JSON for script integration.
+ * 
+ * @param count USB device logical index
+ * @param argc Number of arguments (includes "CPLD" as argv[0])
+ * @param argv Argument array: [0]=CPLD, [1]=SubCmd, [2...]=Parameters
+ * @return int 0 on success, -1 on error
+ */
 int handle_cpld(int count, int argc, char* argv[]) {
-    // argv[0] is "CPLD" (context passed from main)
-    // argv[1] is expected to be a sub-command (Id, Version, Get, Set)
-
+    // Validate sub-command is provided
+    // Expected: argv[0]="CPLD", argv[1]=SubCommand
     if (argc < 2) {
         dbg_printf("[Error] CPLD command needs sub-command (Id, Version, Get, Set)\n");
         return -1;
@@ -63,8 +123,12 @@ int handle_cpld(int count, int argc, char* argv[]) {
 #endif
     const char* subCmd = argv[1];
     
+    // --- Sub-command: CPLD Id ---
+    // Reads the JTAG ID from the CPLD chip
     if (STR_EQUAL(subCmd, "Id")) {
         cmd_printf("[CMD] Count=%d, Action=Read CPLD ID\n", count);
+        
+        // Read board data structure from MCU via USB
         M463_BoardData_t boardInfo;
         memset(&boardInfo, 0, sizeof(boardInfo)); // Initialize to zero
         int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
@@ -115,6 +179,8 @@ int handle_cpld(int count, int argc, char* argv[]) {
 
          }
 
+    // --- Sub-command: CPLD Version ---
+    // Reads the firmware version number from CPLD
     else if (STR_EQUAL(subCmd, "Version")) {
         cmd_printf("[CMD] Count=%d, Action=Read CPLD Version\n", count);
 
@@ -162,11 +228,15 @@ int handle_cpld(int count, int argc, char* argv[]) {
         cJSON_Delete(root);
 
     }
+    // --- Sub-command: CPLD Get ---
+    // Reads one or more bytes from CPLD I2C registers
+    // Usage: CPLD Get <RegAddr> <Length>
     else if (STR_EQUAL(subCmd, "Get")) {
         cmd_printf("[CMD] Count=%d, Action=CPLD Get value\n", count);
-        // 2. Parse Reg and Len
-        // Use strtoul to support hex strings starting with 0x
+        
+        // Parse register address (supports hex with 0x prefix)
         unsigned int reg_addr = strtoul(argv[2], NULL, 16);
+        // Parse length (number of bytes to read)
         int length = atoi(argv[3]);
 
         if (length <= 0) {
@@ -229,21 +299,24 @@ int handle_cpld(int count, int argc, char* argv[]) {
         
         }
     }
+    // --- Sub-command: CPLD Set ---
+    // Writes a single byte value to a CPLD I2C register
+    // Usage: CPLD Set <RegAddr> <Value>
     else if (STR_EQUAL(subCmd, "Set")) {
-        // Subsequent parameters might follow: M463 <cnt> CPLD Set <Reg> <Val>
         cmd_printf("[CMD] Count=%d, Action=CPLD Set value\n", count);
 
-        // 1. Check argument count
+        // Validate argument count
         if (argc < 4) {
             dbg_printf("[Error] Usage: CPLD Set <Reg> <Data>\n");
             return -1;
         }
 
-        // 2. Parse input parameters (Reg and Data)
-        // strtoul supports 0x prefix for hex
+        // Parse register address and write value (hex supported)
         unsigned int reg_addr = strtoul(argv[2], NULL, 16);
         unsigned int write_val = strtoul(argv[3], NULL, 16);
         int is_success;
+        
+        // Execute I2C write operation
         if (usbd_multi_cpld_i2c_set((unsigned char)count,reg_addr, write_val) == 0){
             // 3. Execute hardware write
              is_success = 1;
@@ -299,6 +372,18 @@ nvme_info_t mock_nvme_data[] = {
 };
 
 
+// -----------------------------------------------------------------------------
+// Helper Functions for NVMe Drive Information Processing
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Removes trailing spaces from a string in-place.
+ * 
+ * Used to clean up serial numbers and other text fields that may be
+ * padded with spaces from NVMe-MI responses.
+ * 
+ * @param str Null-terminated string to trim (modified in-place)
+ */
 void trim_trailing_spaces(char* str) {
     int len= (int)strlen(str);
     while (len > 0 && str[len - 1] == ' ') {
@@ -307,9 +392,12 @@ void trim_trailing_spaces(char* str) {
     }
 }
 
-// ---------------------------------------------------------
-// Helper: Determine vendor name based on Vendor ID (VID)
-// ---------------------------------------------------------
+/**
+ * @brief Maps NVMe Vendor ID to human-readable manufacturer name.
+ * 
+ * @param vid 16-bit Vendor ID from NVMe device
+ * @return const char* Vendor name string ("Intel", "Samsung", etc.) or "Unknown"
+ */
 const char* get_vendor_name(uint16_t vid) {
     switch (vid) {
     case 0x8086: return "Intel";
@@ -327,10 +415,32 @@ const char* get_vendor_name(uint16_t vid) {
 }
 
 
-// [HDD Info] - Corrected version (matching NVMe-MI Basic Management format)
+// -----------------------------------------------------------------------------
+// Group B: HDD/NVMe Drive Management Commands
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Retrieves and displays information for all installed NVMe drives.
+ * 
+ * Reads NVMe-MI Basic Management data for each drive slot, extracts vendor ID,
+ * serial number, and formats the output as JSON. VID is used to determine the
+ * manufacturer name.
+ * 
+ * Output JSON format:
+ * {
+ *   "NVMECount": 6,
+ *   "NVME1": {"product": "Samsung", "SN": "S4EMNF0M123456", "Version": "NA"},
+ *   ...
+ * }
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int 0 on success, -1 on error
+ */
 int do_hdd_info(int count, int argc, char* argv[]) {
 
-    // 1. Read USB data
+    // Read board data structure containing NVMe slot information
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo));
 
@@ -437,9 +547,30 @@ int do_hdd_info(int count, int argc, char* argv[]) {
 }
 
 
-// [HDD Port Status] - Added JSON implementation
+/**
+ * @brief Checks and reports the physical presence status of NVMe drives.
+ * 
+ * Reads CPLD port status registers (offset 0x40-0x4F) where each drive
+ * occupies 2 bits:
+ * - 00: Not present
+ * - 01: SATA present (plugin detected)
+ * - 10: NVMe not present
+ * - 11: NVMe present (plugin detected)
+ * 
+ * Output JSON example:
+ * {
+ *   "NVMECount": 6,
+ *   "NVME1": "true",
+ *   "NVME2": "false",
+ *   ...
+ * }
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array (expects [1]="Status")
+ * @return int 0 on success, -1 on error
+ */
 int do_hdd_port(int count, int argc, char* argv[]) {
-    // argv[0]="Port", argv[1]="Status"
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo)); // Initialize to zero
     int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
@@ -519,16 +650,39 @@ int do_hdd_port(int count, int argc, char* argv[]) {
     return 0;
 }
 
-// [HDD LED Status] - Read Register and parse LED status
+/**
+ * @brief Reads and reports LED status for all NVMe drive bays.
+ * 
+ * Parses CPLD LED status registers (offset 0x50-0x5F). Each drive uses 2 bits:
+ * - 00: Standby (normal operation)
+ * - 01: Fault (error condition)
+ * - 10: Locate (identification mode)
+ * - 11: Rebuild (RAID rebuild in progress)
+ * 
+ * Only reports status for drives that are physically present.
+ * 
+ * Output JSON example:
+ * {
+ *   "NVMECount": 6,
+ *   "NVME1": "Standby",
+ *   "NVME2": "NA",
+ *   ...
+ * }
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array (expects [1]="Status")
+ * @return int 0 on success, -1 on error
+ */
 int do_hdd_led(int count, int argc, char* argv[]) {
 
-    // 1. Check arguments
+    // Validate command format
     if (argc < 2 || !STR_EQUAL(argv[1], "Status")) {
         dbg_printf("[Error] Usage: HDD LED Status\n");
         return -1;
     }
 
-    // 2. Read USB data
+    // Read board data structure
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo));
 
@@ -624,11 +778,36 @@ int do_hdd_led(int count, int argc, char* argv[]) {
     return 0;
 }
 
-// [HDD Temp]
+/**
+ * @brief Reads and reports temperature for all installed NVMe drives.
+ * 
+ * Extracts composite temperature from NVMe-MI Basic Management data (Byte 3).
+ * Temperature is returned as signed integer in Celsius.
+ * 
+ * Temperature encoding:
+ * - 0x00-0x7E: 0°C to 126°C
+ * - 0x7F: >= 127°C
+ * - 0x80: No data / Old data
+ * - 0x81: Sensor failure
+ * - 0xC5-0xFF: -59°C to -1°C (2's complement)
+ * 
+ * Output JSON example:
+ * {
+ *   "NVMECount": 6,
+ *   "NVME1": "42",
+ *   "NVME2": "NA",
+ *   ...
+ * }
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int 0 on success, -1 on error
+ */
 int do_hdd_temp(int count, int argc, char* argv[]) {
     cmd_printf("[CMD] Count=%d, Action=Read HDD Temp\n", count);
     
-    // 1. Read USB data
+    // Read board data
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo));
 
@@ -749,6 +928,23 @@ cmd_entry_t hdd_table[] = {
     {NULL, NULL, NULL}
 };
 
+/**
+ * @brief Main dispatcher for HDD/NVMe related commands.
+ * 
+ * Routes sub-commands to appropriate handlers:
+ * - Info: Show drive information
+ * - Port: Check physical presence status
+ * - LED: Read LED status indicators
+ * - Temp: Read drive temperatures
+ * - NVMe-Mi: Send NVMe Management Interface commands
+ * 
+ * Uses a local command table for sub-command dispatch.
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array: [0]="HDD", [1]=SubCommand, [2...]=Parameters
+ * @return int 0 on success, -1 on error
+ */
 int handle_hdd(int count, int argc, char* argv[]) {
     /*
      * Input: ./M463 1 HDD Info
@@ -785,7 +981,15 @@ int handle_hdd(int count, int argc, char* argv[]) {
 }
 
 
-// Helper Function to convert ISP_STATE to readable string
+/**
+ * @brief Converts ISP_STATE enum to human-readable error message.
+ * 
+ * Used for generating user-friendly error messages in JSON responses
+ * when firmware update operations fail.
+ * 
+ * @param state ISP_STATE error code
+ * @return const char* Descriptive error string
+ */
 const char* isp_state_to_string(int state) {
     switch (state) {
     case RES_PASS:           return "Success";
@@ -806,11 +1010,38 @@ const char* isp_state_to_string(int state) {
     }
 }
 
-// --- Group C: Single Commands ---
+// -----------------------------------------------------------------------------
+// Group C: Firmware Update and System Control Commands
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Handles firmware update operations for MCU and CPLD.
+ * 
+ * Supports two target types:
+ * 1. M463: MCU firmware update via ISP (In-System Programming)
+ *    - Automatically switches MCU to LDROM bootloader mode
+ *    - Programs APROM with new firmware from .bin file
+ *    - Validates file format and size
+ * 
+ * 2. CPLD: CPLD configuration via SVF (Serial Vector Format)
+ *    - Temporarily stops BMC monitoring during programming
+ *    - Programs CPLD via JTAG interface
+ *    - Restarts BMC monitoring after completion
+ * 
+ * Usage: Update <M463|CPLD> <FilePath>
+ * 
+ * Returns JSON with status:
+ * {"Update Task": "Success"} or {"Update Task": "Fail,<Reason>"}
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="Update", [1]=Target, [2]=FilePath
+ * @return int 0 on success, -1 on error
+ */
 int handle_update(int count, int argc, char* argv[]) {
     cmd_printf("[CMD] Count=%d, Action=Update Target: %s\n", count, argv[1]);
 
-    // 1. Argument check
+    // Validate argument count
     if (argc < 3) {
         dbg_printf("[Error] Usage: Update <M463/CPLD> <File>\n");
         return -1;
@@ -942,10 +1173,25 @@ int handle_update(int count, int argc, char* argv[]) {
     return 0;
 }
 
+/**
+ * @brief Reads and displays MCU firmware version.
+ * 
+ * Queries the MCU via USB HID command 0xB0 to retrieve the 32-bit
+ * firmware version number.
+ * 
+ * Output JSON format:
+ * {"MCU_Version": "0x26011402"}
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="Version", [1]="MCU"
+ * @return int 0 on success, -1 on error
+ */
 int handle_version(int count, int argc, char* argv[]) {
     // M463 <Count> Version <MCU>
     cmd_printf("[CMD] Count=%d, Action=Read MCU Version\n", count);
-    // 1. Argument check
+    
+    // Validate arguments
     if (argc < 2) {
         printf("[Error] Usage: Version <Target> (e.g., MCU)\n");
         return -1;
@@ -1003,6 +1249,21 @@ int handle_version(int count, int argc, char* argv[]) {
     return 0;
 }
 
+/**
+ * @brief Reads backplane board (BPB) temperature sensor.
+ * 
+ * Retrieves temperature from I2C sensor connected to the MCU.
+ * Temperature is calculated from high and low bytes using the
+ * show_temperature() helper function.
+ * 
+ * Output JSON format:
+ * {"BPB_Temp": "35.25"}
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="BPB", [1]="Sensor", [2]="Get"
+ * @return int 0 on success, -1 on error
+ */
 int handle_bpb(int count, int argc, char* argv[]) {
     // M463 <Count> BPB Sensor Get    
     // Context:
@@ -1010,7 +1271,7 @@ int handle_bpb(int count, int argc, char* argv[]) {
     // argv[1] = "Sensor"
     // argv[2] = "Get"
 
-    // 1. Check argument integrity
+    // Validate command format
     if (argc < 3 || !STR_EQUAL(argv[1], "Sensor") || !STR_EQUAL(argv[2], "Get")) {
         dbg_printf("[Error] Usage: BPB Sensor Get\n");
         return -1;
@@ -1061,9 +1322,26 @@ int handle_bpb(int count, int argc, char* argv[]) {
     return 0;
 }
 
+/**
+ * @brief Handles system reset and reset variable management.
+ * 
+ * Supports three operations:
+ * 1. Reset: Performs MCU system reset
+ * 2. Reset Setval <Value>: Sets reset variable (persistent across reboots)
+ * 3. Reset Getval: Reads current reset variable value
+ * 
+ * The reset variable can be used by firmware to determine boot behavior
+ * or store small amounts of persistent state.
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="Reset", [1]=Optional SubCmd, [2]=Optional Value
+ * @return int 0 on success, -1 on error
+ */
 int handle_reset(int count, int argc, char* argv[]) {
     cmd_printf("[CMD] Count=%d, Action=System Reset\n", count);
     
+    // Operation: Reset Setval <Value>
     if (argc == 3 && STR_EQUAL(argv[0], "Reset") && STR_EQUAL(argv[1], "Setval")) {
         // Value should be in argv[2]
         unsigned char temp = (unsigned char)strtoul(argv[2], NULL, 16);
@@ -1166,6 +1444,23 @@ int handle_reset(int count, int argc, char* argv[]) {
     return -1;
 }
 extern void list_nuvoton_devices(void);
+/**
+ * @brief Provides direct I2C bus access for debugging and testing.
+ * 
+ * Allows reading/writing arbitrary I2C devices connected to the MCU's I2C bus.
+ * Bypasses normal CPLD-specific logic for general-purpose I2C communication.
+ * 
+ * Sub-commands:
+ * - Get <I2CAddr> <RegAddr> <Length>: Read bytes from I2C device
+ * - Set <I2CAddr> <RegAddr> <Value>: Write byte to I2C device
+ * 
+ * All addresses support hex format (0x notation).
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="I2CBYPASS", [1]=SubCmd, [2...]=Parameters
+ * @return int 0 on success, -1 on error
+ */
 int handle_i2c_bypass(int count, int argc, char* argv[]) {
     // M463 <Count> I2CBYPASS <Cmd>
     cmd_printf("[CMD] Count=%d, Action=I2C Bypass Mode\n", count);
@@ -1296,24 +1591,54 @@ int handle_i2c_bypass(int count, int argc, char* argv[]) {
     return 0;
 }
 
+/**
+ * @brief Lists all connected USB devices matching target VID/PID.
+ * 
+ * Scans the USB bus and displays information about all detected devices
+ * that match the configured Vendor ID and Product ID. Useful for identifying
+ * which device index to use when multiple boards are connected.
+ * 
+ * Output JSON format:
+ * {
+ *   "USBCount": 2,
+ *   "USB0": "Bus 3, Port 2.1",
+ *   "USB1": "Bus 3, Port 2.2"
+ * }
+ * 
+ * @param count USB device index (not used for this command)
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int Always returns 0
+ */
 int handle_usblist(int count, int argc, char* argv[]) {
-    // Logic to list USB devices
     cmd_printf("[CMD] Count=%d, Action=List All USB Devices\n", count);
 
-    // If future usblist needs parameters (e.g., usblist -v), use argc/argv
+    // Optional verbose mode
     if (argc > 1 && STR_EQUAL(argv[1], "-v")) {
         dbg_printf("      (Verbose Mode: Show Details...)\n");
     }
 
+    // Call device enumeration function
     list_nuvoton_devices();
 
     return 0;
 }
 
-
+/**
+ * @brief Displays the application version number.
+ * 
+ * Returns the version string defined in app_version_number constant.
+ * 
+ * Output JSON format:
+ * {"app_version": "1.0.0"}
+ * 
+ * @param count USB device index (not used)
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int Always returns 0
+ */
 int handle_appversion(int count, int argc, char* argv[]) {
-    // Logic to list USB devices
-    cmd_printf("[CMD] Count=%d, Action=List All USB Devices\n", count);
+    cmd_printf("[CMD] Count=%d, Action=Show App Version\n", count);
 
     if (argc > 1 && STR_EQUAL(argv[1], "-v")) {
         dbg_printf("      (Verbose Mode: Show Details...)\n");
@@ -1337,10 +1662,27 @@ int handle_appversion(int count, int argc, char* argv[]) {
     return 0;
 }
 
-
+/**
+ * @brief Dumps complete register and sensor information for debugging.
+ * 
+ * Retrieves all available system data including:
+ * - Temperature sensor readings
+ * - CPLD version and configuration
+ * - All CPLD registers (port status, LED status, etc.)
+ * - Detailed NVMe-MI information for all drives
+ * 
+ * Output is verbose plain text (not JSON) for human readability.
+ * Useful for troubleshooting and system diagnostics.
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int 0 on success, -1 on error
+ */
 int handle_dumpall(int count, int argc, char* argv[]) {
-    // Logic to dump all registers
-    cmd_printf("[CMD] Count=%d, Action=dump All resgister \n", count);
+    cmd_printf("[CMD] Count=%d, Action=Dump All Registers\n", count);
+    
+    // Read complete board data structure
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo)); // Initialize to zero
     int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
@@ -1391,12 +1733,35 @@ int handle_dumpall(int count, int argc, char* argv[]) {
 const char* mock_fan_rpm[] = { "1200", "3600", "na" };
 const char* mock_fan_duty[] = { "10",   "36",   "na" };
 
+/**
+ * @brief Manages cooling fan speed monitoring and control.
+ * 
+ * Supports two categories:
+ * 1. FAN RPM Get: Read current fan speed in revolutions per minute
+ *    - Calculated from frequency counter: RPM = 1350000 / CounterValue
+ * 
+ * 2. FAN Duty Get/Set: Read or set PWM duty cycle (0-100%)
+ *    - Get: Reads current duty cycle from fan controller
+ *    - Set <ID> <Duty>: Sets specific fan to duty cycle
+ *    - Set <AllDuty>: Sets all fans to same duty cycle
+ *    - Set <file.json>: Loads fan configuration from JSON file
+ * 
+ * Output JSON format:
+ * {"FANcount": "1", "FAN1": "1500"} (for RPM)
+ * {"FANcount": "1", "FAN1": "50"} (for Duty %)
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="FAN", [1]=RPM/Duty, [2]=Get/Set, [3...]=Parameters
+ * @return int 0 on success, -1 on error
+ */
 int handle_fan(int count, int argc, char* argv[]) {
     // Context Check:
     // argv[0] = "FAN" (passed from main table)
     // argv[1] = Sub-category ("RPM" or "Duty")
     // argv[2] = Action ("Get" or "Set")
 
+    // Validate argument count
     if (argc < 3) {
         dbg_printf("[Error] Usage: FAN <RPM/Duty> <Get/Set> [Args...]\n");
         return -1;
@@ -1587,13 +1952,31 @@ int handle_fan(int count, int argc, char* argv[]) {
 
     return 0;
 }
+/**
+ * @brief Reads global LED indicator status.
+ * 
+ * Queries the status of system-level LEDs (not drive-specific LEDs).
+ * Typically includes:
+ * - GLED_AMB_N_R: Amber LED status (0=off, 1=on)
+ * - GLED_GRN_N_R: Green LED status (0=off, 1=on)
+ * 
+ * These LEDs indicate overall system health and status.
+ * 
+ * Output JSON format:
+ * {"GLED_AMB_N_R": "0", "GLED_GRN_N_R": "1"}
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="Global", [1]="LED", [2]="Status"
+ * @return int 0 on success, -1 on error
+ */
 int handle_global(int count, int argc, char* argv[]) {
     // Context:
     // argv[0] = "Global" (passed from cmd_table)
     // argv[1] = "LED"
     // argv[2] = "Status"
 
-    // 1. Check argument integrity
+    // Validate command format
     if (argc < 3 || !STR_EQUAL(argv[1], "LED") || !STR_EQUAL(argv[2], "Status")) {
         dbg_printf("[Error] Usage: Global LED Status\n");
         return -1;
@@ -1636,10 +2019,91 @@ int handle_global(int count, int argc, char* argv[]) {
     }
     return 0;
 }
-// ---------------------------------------------------------
-// 3. Main Look-up Table
-// ---------------------------------------------------------
-// Categorizing the 14 commands into these main categories
+
+
+
+/**
+ * @brief Manages MCU internal EEPROM read/write operations.
+ * 
+ * Provides access to 256 bytes of non-volatile EEPROM storage on the MCU.
+ * Useful for storing calibration data, configuration, or small persistent values.
+ * 
+ * Sub-commands:
+ * - WRITE <file.bin>: Writes binary file content to EEPROM (max 256 bytes)
+ * - READ <file.bin>: Reads EEPROM content to binary file (not yet implemented)
+ * 
+ * Output JSON format:
+ * {"Write Task": "Success"} or {"Update Task": "Fail"}
+ * 
+ * @param count USB device index
+ * @param argc Argument count
+ * @param argv Arguments: [0]="EEPROM", [1]=WRITE/READ, [2]=FilePath
+ * @return int 0 on success, -1 on error
+ */
+int handle_eeprom(int count, int argc, char* argv[]) {
+    cmd_printf("[CMD] Count=%d, Action=EEPROM Operation: %s\n", count, argv[1]);
+
+    // Validate arguments
+    if (argc < 3) {
+        dbg_printf("[Error] Usage: EEPROM <WRITE/READ> <File>\n");
+        return -1;
+    }
+
+    char* target = argv[1];
+    char* filepath = argv[2];
+    int EEPROM_result = RES_FALSE; // Default to fail
+    char fail_reason[128] = { 0 }; // Initialize buffer
+    int result = 0;
+    
+    if (STR_EQUAL(target, "WRITE"))
+    {
+        // Check file extension
+        if (is_bin_file(filepath) != 0) {
+            EEPROM_result = RES_FILE_NO_FOUND;
+            snprintf(fail_reason, sizeof(fail_reason), "Invalid File Extension");
+            goto create_json; // Jump to JSON generation
+        }
+
+        // --- Core modification: receive return value ---
+        EEPROM_result = usbd_multi_mcu_eeprom_write((unsigned char)count, filepath);
+
+    create_json:
+        // 4. Create JSON response
+        cJSON* root = cJSON_CreateObject();
+
+        // Check if isp_result is RES_PASS
+        if (EEPROM_result == 0) {
+            // Success format: {"Update Task": "Success"}
+            cJSON_AddStringToObject(root, "Write Task", "Success");
+        }
+        else {
+            
+            cJSON_AddStringToObject(root, "Update Task", "Fail");
+        }
+
+        // 5. Print and release
+        char* out = cJSON_PrintUnformatted(root); 
+        dbg_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+    }
+}
+// =============================================================================
+// 3. Main Command Dispatch Table
+// =============================================================================
+
+/**
+ * @brief Master command lookup table for top-level commands.
+ * 
+ * Each entry maps a command name to its handler function and provides
+ * help text. The table is NULL-terminated for iteration.
+ * 
+ * Commands are processed by:
+ * 1. Parsing USB device index from argv[1]
+ * 2. Looking up command name (argv[2]) in this table
+ * 3. Calling the associated handler with remaining arguments
+ */
 cmd_entry_t cmd_table[] = {
     {"CPLD",      handle_cpld,       "CPLD Id / Version / Get / Set"},
     {"HDD",       handle_hdd,        "HDD Info / Port / LED / Temp / NVMe-Mi"},
@@ -1658,15 +2122,41 @@ cmd_entry_t cmd_table[] = {
 
     {"appver",   handle_appversion,    "app verison information"},
     {"dumpall",   handle_dumpall,    "dump all information"},
-
+    {"EEPROM",   handle_eeprom,    "EEPROM Read/Write"},
     {NULL, NULL, NULL} // End marker
 };
 
-// ---------------------------------------------------------
-// 4. Main Function
-// ---------------------------------------------------------
+// =============================================================================
+// 4. Main Entry Point
+// =============================================================================
+
+/**
+ * @brief Main entry point for M460 CLI application.
+ * 
+ * Command-line format: M460 <USBIndex> <Command> [SubCmd] [Args...]
+ * 
+ * Arguments:
+ *   USBIndex: 0-based index for USB device when multiple boards are connected
+ *   Command:  Top-level command name (see cmd_table[])
+ *   SubCmd:   Command-specific sub-command (optional)
+ *   Args:     Additional parameters (command-specific)
+ * 
+ * Examples:
+ *   M460 0 usblist              - List all connected devices
+ *   M460 0 CPLD Version         - Read CPLD firmware version
+ *   M460 1 HDD Info             - Show info for all drives on device #1
+ *   M460 0 FAN Duty Set 1 50    - Set fan 1 to 50% duty cycle
+ *   M460 0 Update M463 fw.bin   - Update MCU firmware
+ * 
+ * All responses are formatted as JSON for easy parsing by automation tools.
+ * 
+ * @param argc Argument count
+ * @param argv Argument array
+ * @return int 0 on success, 1 on error
+ */
 int main(int argc, char* argv[]) {
 
+    // Display usage if insufficient arguments
     if (argc < 3) {
         dbg_printf("Usage: %s <Count> <Command> [Args...]\n", argv[0]);
         dbg_printf("Available Commands:\n");
@@ -1676,13 +2166,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Parse USB device index (first argument)
     int count = atoi(argv[1]);
 
+    // Lookup and dispatch command
     char* target_cmd = argv[2];
     int found = 0;
 
     for (int i = 0; cmd_table[i].name != NULL; i++) {
         if (STR_EQUAL(target_cmd, cmd_table[i].name)) {
+            // Call handler with adjusted argc/argv (skip program name and count)
             cmd_table[i].handler(count, argc - 2, argv + 2);
             found = 1;
             break;

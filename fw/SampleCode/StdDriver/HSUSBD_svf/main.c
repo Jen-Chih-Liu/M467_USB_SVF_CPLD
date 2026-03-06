@@ -647,7 +647,30 @@ int main(void)
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
 
             }
+						// Command 0xc1: programming eeprom
+            if (usb_rcvbuf[0] == 0xc1)
+            {
+                
+							 EEPROM_WriteData(0x00, &usb_rcvbuf[1], 256);            
+						}
+						
+						//command 0xc2 read: eeprom
+						if (usb_rcvbuf[0] == 0xc2)
+            {
+                  response_buff[0] = 0xc2;
+							  EEPROM_ReadData(0x00, &response_buff[1], 256);
+							 
+							 for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
 
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+							
+							
+            }
+						
             // Command 0xd0: I2C write.
             if (usb_rcvbuf[0] == 0xd0)
             {
@@ -658,6 +681,10 @@ int main(void)
                     i2c_write_bytes = I2C_WriteMultiBytes(I2C1, usb_rcvbuf[2] >> 1, &usb_rcvbuf[4], usb_rcvbuf[3]);
             }
 
+
+						
+						
+						
             // Command 0xd1: Acknowledge I2C write.
             if (usb_rcvbuf[0] == 0xd1)
             {

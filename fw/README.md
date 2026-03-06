@@ -66,6 +66,8 @@ The device communicates via 1024-byte HID report packets.
 | `0xb2` | **Get Var** | `[1]=0x6a` | Returns `[0]=0xb2, [1]=reset_var`. |
 | `0xb3` | **Get LED Pins**| None | Returns `[0]=0xb3, [1]=AMB_Pin, [2]=GRN_Pin`. |
 | `0xc0` | **Read BMC** | None | Returns full 1024-byte `bmc_report` array. |
+| `0xc1` | **Write EEPROM** | `[1...256]`: 256 bytes of data to write | Writes 256 bytes to EEPROM starting at address 0x00. |
+| `0xc2` | **Read EEPROM** | None | Returns `[0]=0xc2, [1...256]`: 256 bytes read from EEPROM. |
 | `0xd0` | **I2C Write** | `[1]=Bus, [2]=Addr, [3]=Len, [4...]=Data` | Starts I2C write transaction. |
 | `0xd1` | **I2C Write Ack**| None | Returns `[0]=0xd1, [1]=BytesWritten`. |
 | `0xd2` | **I2C Read** | `[1]=Bus, [2]=Addr, [3]=Len` | Starts I2C read transaction. |
