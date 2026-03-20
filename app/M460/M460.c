@@ -2088,6 +2088,7 @@ int handle_eeprom(int count, int argc, char* argv[]) {
         free(out);
         cJSON_Delete(root);
     }
+     return 0;
 }
 // =============================================================================
 // 3. Main Command Dispatch Table

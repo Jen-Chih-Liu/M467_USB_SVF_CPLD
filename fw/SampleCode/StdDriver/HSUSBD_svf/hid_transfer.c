@@ -11,12 +11,18 @@
 #include <string.h>
 #include "NuMicro.h"
 #include "hid_transfer.h"
-#define MAX_STRING_LENGTH 1024
+/* USB packet size is always 1024 bytes.
+ * svf_string_rcvbuf must be large enough to accumulate a complete SVF command
+ * that spans multiple USB packets (e.g. SDR 2088 with TDI/TDO/MASK can exceed 2 KB).
+ * 8192 bytes is sufficient for the largest known SVF commands.
+ */
+#define MAX_STRING_LENGTH  1024   /* USB RX packet buffer (one packet) */
+#define SVF_BUF_LENGTH     8192   /* SVF accumulation buffer            */
 uint8_t volatile g_u8EPAReady = 0;
 uint32_t g_u32EpAMaxPacketSize;
 uint32_t g_u32EpBMaxPacketSize;
 volatile uint8_t usb_rcvbuf[MAX_STRING_LENGTH] __attribute__((aligned(4)));
-volatile uint8_t svf_string_rcvbuf[MAX_STRING_LENGTH] __attribute__((aligned(4)));
+volatile uint8_t svf_string_rcvbuf[SVF_BUF_LENGTH] __attribute__((aligned(4)));
 volatile uint8_t string_received = 0;
 volatile uint16_t buffer_index = 0;
 volatile uint8_t response_buff[1024] __attribute__((aligned(4)));

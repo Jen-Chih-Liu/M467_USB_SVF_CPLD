@@ -2,6 +2,7 @@
 ############################
 lst/
 RTE/
+#obj/
 *.plg
 *.scvd
 *.bak
@@ -16,7 +17,7 @@ RTE/
 *.axf
 *.elf
 *.hex
-
+#*.bin
 # User-specific files
 *.uvgui.*
 
@@ -36,6 +37,6 @@ Thumbs.db
 
 # Build results
 [Bb]in/
-[Oo]bj/
+#[Oo]bj/
 [Rr]elease/
 [Dd]ebug/

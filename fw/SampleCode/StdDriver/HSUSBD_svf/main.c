@@ -14,7 +14,8 @@
 #include "g_def.h"
 volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) = {0};
 extern volatile uint8_t string_received;
-extern volatile uint8_t svf_string_rcvbuf[1024] __attribute__((aligned(4)));
+extern volatile uint8_t svf_string_rcvbuf[8192] __attribute__((aligned(4)));
+#define SVF_BUF_LENGTH 8192
 extern volatile uint8_t usb_rcvbuf[1024] __attribute__((aligned(4)));
 extern volatile uint16_t buffer_index;
 extern volatile uint8_t response_buff[1024] __attribute__((aligned(4)));
@@ -416,7 +417,6 @@ int main(void)
         if (timer0_count > 500)
         {
 #if 1
-
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
@@ -461,27 +461,53 @@ int main(void)
         // Process incoming USB commands.
         if (string_received == TRUE)
         {
-            // Disable interrupts to process the command atomically.
+            //PA4=0;
             __set_PRIMASK(1);
+            //svf command parser
 
-            // --- SVF Command Parser ---
-            // Command 0xa1: Process an SVF command packet.
+            /* -------------------------------------------------------
+             * 0xa2 : Continuation packet for a multi-packet SVF command.
+             *        Payload bytes [1..1023] are appended to
+             *        svf_string_rcvbuf[] starting at buffer_index.
+             *        No SVF processing yet ¡V just accumulate.
+             * ------------------------------------------------------- */
+            if (usb_rcvbuf[0] == 0xa2)
+            {
+                uint16_t k;
+                for (k = 0; k < 1023; k++)
+                {
+                    if ((uint32_t)(buffer_index + k) >= SVF_BUF_LENGTH - 1)
+                        break; /* guard against overflow */
+                    svf_string_rcvbuf[buffer_index + k] = usb_rcvbuf[k + 1];
+                }
+                buffer_index = (uint16_t)(buffer_index + k);
+                /* No response sent ¡V host does not read between 0xa2 packets */
+            }
+
+            /* -------------------------------------------------------
+             * 0xa1 : Final (or only) packet for an SVF command.
+             *        Appends payload to svf_string_rcvbuf starting at
+             *        buffer_index, then processes the complete command.
+             * ------------------------------------------------------- */
             if (usb_rcvbuf[0] == 0xa1)
             {
 #if 1
                 uint16_t terminator_pos = 0;
+                uint16_t write_start    = buffer_index; /* where to append */
 
                 // Copy the SVF command string from the USB buffer until a ';' is found.
                 for (terminator_pos = 0; terminator_pos < 1023; terminator_pos++)
                 {
-                    svf_string_rcvbuf[terminator_pos] =  usb_rcvbuf[terminator_pos + 1];
+                    if ((uint32_t)(write_start + terminator_pos) >= SVF_BUF_LENGTH - 1)
+                        break; /* guard against overflow */
 
-                    if (svf_string_rcvbuf[terminator_pos] == ';')
+                    svf_string_rcvbuf[write_start + terminator_pos] = usb_rcvbuf[terminator_pos + 1];
+
+                    if (svf_string_rcvbuf[write_start + terminator_pos] == ';')
                     {
-                        buffer_index = terminator_pos;
+                        buffer_index = (uint16_t)(write_start + terminator_pos);
                         break;
                     }
-
                 }
 
                 svf_string_rcvbuf[buffer_index + 1] = 0x00;
@@ -501,7 +527,7 @@ int main(void)
                     cpld_false_flag = 1;
                 }
 
-                memset(svf_string_rcvbuf, 0x0, buffer_index); // Clear the processed command.
+                memset((void *)svf_string_rcvbuf, 0x0, (uint32_t)(buffer_index + 2));
                 buffer_index = 0;
                 total_line++;
 
@@ -520,6 +546,8 @@ int main(void)
             {
                 total_line = 0;
                 cpld_false_flag = 0;
+                buffer_index = 0; /* reset accumulation buffer in case a previous transfer was interrupted */
+                memset((void *)svf_string_rcvbuf, 0x0, SVF_BUF_LENGTH);
                 response_buff[0] = 0;
                 response_buff[1] = 0;
                 response_buff[2] = 0;
@@ -647,7 +675,9 @@ int main(void)
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
 
             }
-						// Command 0xc1: programming eeprom
+
+
+			// Command 0xc1: programming eeprom
             if (usb_rcvbuf[0] == 0xc1)
             {
                 
@@ -670,7 +700,7 @@ int main(void)
 							
 							
             }
-						
+
             // Command 0xd0: I2C write.
             if (usb_rcvbuf[0] == 0xd0)
             {
@@ -681,10 +711,6 @@ int main(void)
                     i2c_write_bytes = I2C_WriteMultiBytes(I2C1, usb_rcvbuf[2] >> 1, &usb_rcvbuf[4], usb_rcvbuf[3]);
             }
 
-
-						
-						
-						
             // Command 0xd1: Acknowledge I2C write.
             if (usb_rcvbuf[0] == 0xd1)
             {

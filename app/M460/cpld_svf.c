@@ -124,29 +124,76 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
         const char* original_cmd = svf.commands[i];
         size_t original_len = strlen(original_cmd);
 
-        // --- Prepare command with 0xA1 prefix for device ---
-        char* cmd = (char*)malloc(original_len + 1);
-        if (cmd == NULL) {
-            fprintf(stderr, "Error: Memory allocation failed!\n");
-            if (out_failed_line) *out_failed_line = i + 1;
-            return CPLD_ERR_SVF_PARSE;
-        }
-        cmd[0] = 0xa1;
-        memcpy(cmd + 1, original_cmd, original_len);
-#if dump_svf_log
-        printf("Command %d: %s\n", i + 1, original_cmd); // Uncomment for verbose debugging
+        // --- 命令封包組裝與發送（支援超過 1023 byte 的大型 SVF 命令）---
+        //
+        // 協定:
+        //   0xa2  = Continuation packet (中間段，不含 ';')
+        //           Payload: bytes[1..1023] = SVF text fragment
+        //           Firmware: 追加到緩衝區，不處理，不回應
+        //   0xa1  = Final (or only) packet (含 ';')
+        //           Payload: bytes[1..1023] = SVF text (含結尾 ';')
+        //           Firmware: 追加後解析執行，回傳結果
+        //
+        // 每個 USB 封包固定 PACKET_SIZE (1024) bytes，
+        // 其中 byte[0] 為命令碼，byte[1..1023] 為 payload (最多 1023 bytes)。
+#define SVF_PAYLOAD_SIZE  1023
+        {
+            size_t offset = 0;
+            int    send_error = 0;
 
-        if ((i + 1) % 100 == 0) {
-            printf("Progress: %d / %d\n", (i + 1), svf.count);
-        }
+            while (offset < original_len)
+            {
+                size_t remaining  = original_len - offset;
+                int    is_last    = (remaining <= (size_t)SVF_PAYLOAD_SIZE);
+                size_t chunk_size = is_last ? remaining : (size_t)SVF_PAYLOAD_SIZE;
+
+                /* Allocate PACKET_SIZE+1 bytes (zero-initialised) so that
+                 * strlen() in send_string_hid_interrupt() always finds a
+                 * null terminator even when chunk_size == SVF_PAYLOAD_SIZE. */
+                unsigned char *chunk = (unsigned char *)calloc(PACKET_SIZE + 1, 1);
+                if (chunk == NULL)
+                {
+                    fprintf(stderr, "Error: Memory allocation failed (chunk)!\n");
+                    if (out_failed_line) *out_failed_line = i + 1;
+                    return CPLD_ERR_SVF_PARSE;
+                }
+
+                chunk[0] = is_last ? (unsigned char)0xa1 : (unsigned char)0xa2;
+                memcpy(chunk + 1, original_cmd + offset, chunk_size);
+
+#if dump_svf_log
+                if (is_last)
+                    printf("Command %d [final pkt, offset=%zu, chunk=%zu]: %.80s\n",
+                           i + 1, offset, chunk_size, original_cmd + offset);
+                else
+                    printf("Command %d [cont  pkt, offset=%zu, chunk=%zu]\n",
+                           i + 1, offset, chunk_size);
 #endif
-        // --- Send Command ---
-        if (send_string_hid_interrupt(handle, ep_out, cmd) != 0) {
-            free(cmd);
-            if (out_failed_line) *out_failed_line = i + 1;
-            return CPLD_ERR_TIMEOUT; 
+                if ((i + 1) % 10 == 0)
+                    printf("Progress: %d / %d\r", (i + 1), svf.count);
+
+
+                if (send_string_hid_interrupt(handle, ep_out, (const char *)chunk) != 0)
+                {
+                    free(chunk);
+                    send_error = 1;
+                    break;
+                }
+
+                free(chunk);
+                offset += chunk_size;
+                //if (is_last)
+                  //  sleep_seconds_svf(0.05); /* 50 ms between is last packets */
+
+            }
+
+            if (send_error)
+            {
+                if (out_failed_line) *out_failed_line = i + 1;
+                return CPLD_ERR_TIMEOUT;
+            }
         }
-        free(cmd);
+#undef SVF_PAYLOAD_SIZE
 
         // --- Handle Delay (Command-specific) ---
         const char* sec_ptr = strstr(original_cmd, " SEC");
@@ -163,28 +210,30 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
             double seconds = atof(num_start);
 #if 0
             if (seconds >= 0.05) {
-                printf("Waiting for %.4f seconds...\n", seconds);
+                printf("Waiting for %.4f seconds...\r", seconds);
                 sleep_seconds_svf(seconds);
             }
 #endif
 #if 1
             if (i < ((svf.count * 2) / 3))
             {
-                // Unconditional sleep for first 2/3 of commands
+                //if (seconds >= 0.05) {
+                //printf("Waiting for %.4f seconds...\r", seconds);
                 sleep_seconds_svf(seconds);
+                //}
             }
             else
             {
                 if (seconds >= 0.05) {
-                    printf("Waiting for %.4f seconds...\n", seconds);
+                   // printf("Waiting for %.4f seconds...\r", seconds);
                     sleep_seconds_svf(seconds);
                 }
             }
 #endif
         }
 
-        // --- Periodic Status Check ---
-        if ((i + 1) % 1000 == 0) {
+        // --- 週期性檢查 (Periodic Check) ---
+        if ((i + 1) % 500 == 0) {
             uint32_t error_code = check_device_status(handle, ep_in);
             if (error_code != 0) {
                 fprintf(stderr, "Error! Device reported error at SVF cmd %d (DevCode: %u)\n", i + 1, error_code);

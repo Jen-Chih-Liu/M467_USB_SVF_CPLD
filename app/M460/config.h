@@ -132,6 +132,7 @@ typedef enum {
     RES_SN_OK,
     RES_DETECT_MCU,
     RES_NO_DETECT,
+    RES_FILE_SIZE_SMALL,
 } ISP_STATE;
 // CPLD SVF Error Codes
 typedef enum {

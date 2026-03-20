@@ -672,8 +672,11 @@ ISP_STATE File_Open_APROM(const char* temp)
             fclose(fp);
             return RES_FILE_SIZE_OVER;
         }
-        
-        // Read entire file into buffer
+        if (file_size != aprom_size_t) {
+            fclose(fp);
+            return RES_FILE_SIZE_SMALL;
+        }
+
         fread(W_APROM_BUFFER, 1, file_size, fp);
         fclose(fp);
     }
@@ -829,7 +832,40 @@ int is_bin_file(const char* filename)
 
     // Case-insensitive comparison of extension
      if (_stricmp(&filename[len - 4], ".bin") == 0) {
-         return 0; 
+       
+         
+
+         FILE* fp;
+         file_size = 0;
+         
+         if ((fp = fopen(filename, "rb")) == NULL)
+         {
+             dbg_printf("APROM FILE OPEN FALSE\n\r");
+             return -1;
+         }
+         if (fp != NULL)
+         {
+             // 修正讀取檔案大小的方式
+             fseek(fp, 0, SEEK_END);
+             file_size = ftell(fp);
+             fseek(fp, 0, SEEK_SET);
+             if (file_size > aprom_size_t) {
+                 dbg_printf("APROM FILE SIZE OVER\n\r");
+                 fclose(fp);
+                 return -1;
+             }
+             if (file_size != aprom_size_t) {
+                 dbg_printf("APROM FILE IS SMALL\n\r");
+                 fclose(fp);
+                 return -1;
+             }             
+             fclose(fp);
+             return 0;
+         }
+         else
+         {
+             return -1;
+         }
      }
 
     return -1; 

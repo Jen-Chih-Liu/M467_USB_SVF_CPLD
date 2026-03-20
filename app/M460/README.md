@@ -45,6 +45,23 @@ cmake ..
 cmake --build .
 ```
 
+### Clean Build Files (Keep Executable)
+To remove intermediate build files while preserving the executable:
+
+**Windows (PowerShell):**
+```powershell
+cd build
+Remove-Item -Recurse -Force CMakeFiles,M460.dir
+Remove-Item *.vcxproj,*.filters,CMakeCache.txt,cmake_install.cmake
+```
+
+**Linux:**
+```bash
+cd build
+rm -rf CMakeFiles *.cmake Makefile
+find . -name "*.o" -delete
+```
+
 ## 💻 Usage
 
 The tool uses a logical device index (`<Count>`) to target specific boards in a multi-device environment.
