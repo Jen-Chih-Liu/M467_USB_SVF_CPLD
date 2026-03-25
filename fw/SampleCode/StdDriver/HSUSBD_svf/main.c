@@ -403,12 +403,14 @@ int main(void)
     NVIC_EnableIRQ(TMR0_IRQn);
     TIMER_Start(TIMER0);
     // Initialize the fan controller.
-    fan_inital();
-    FanIC_Backup_init();
-    I2C4_Init();
-    s_I2C4HandlerFn = I2C_SlaveTRx;
-    I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
-        
+   // fan_inital();
+    //FanIC_Backup_init();
+   // I2C4_Init();
+ //   s_I2C4HandlerFn = I2C_SlaveTRx;
+   // I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+      //smbus sel
+   GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
+		
     // Main application loop.
     while (1)
     {
@@ -420,8 +422,8 @@ int main(void)
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
-                FanIC_BackupRegisters();
-                FanIC_CompareAndRestore();
+               // FanIC_BackupRegisters();
+                //FanIC_CompareAndRestore();
                 CPLD_read();          // Read CPLD status.
                 //fan_read();           // Read fan speed and duty cycle.
                 tempersensor_read();  // Read temperature sensor.
@@ -469,7 +471,7 @@ int main(void)
              * 0xa2 : Continuation packet for a multi-packet SVF command.
              *        Payload bytes [1..1023] are appended to
              *        svf_string_rcvbuf[] starting at buffer_index.
-             *        No SVF processing yet ¡V just accumulate.
+             *        No SVF processing yet ï¿½V just accumulate.
              * ------------------------------------------------------- */
             if (usb_rcvbuf[0] == 0xa2)
             {
@@ -481,7 +483,7 @@ int main(void)
                     svf_string_rcvbuf[buffer_index + k] = usb_rcvbuf[k + 1];
                 }
                 buffer_index = (uint16_t)(buffer_index + k);
-                /* No response sent ¡V host does not read between 0xa2 packets */
+                /* No response sent ï¿½V host does not read between 0xa2 packets */
             }
 
             /* -------------------------------------------------------
@@ -569,8 +571,8 @@ int main(void)
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x01;
-                response_buff[2] = 0x14;
+                response_buff[1] = 0x03;
+                response_buff[2] = 0x24;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
@@ -851,15 +853,55 @@ int main(void)
                 HSUSBD->EP[EPA].EPTXCNT = 1024;
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
             }
+						
+						
+						           
+            if (usb_rcvbuf[0] == 0xdc)
+            {
+							
+                PC14 = usb_rcvbuf[2];
+							if (PC14==0)
+							{
+                   CPLD_read();   
+	            }
+}			
+	
+	            // Command 0xdb: Get the status of the I2C monitoring flag.
+            if (usb_rcvbuf[0] == 0xdd)
+            {
 
-            // Clear flags and buffers for the next command.
+                response_buff[0] = 0xdd;
+                response_buff[1] = PC14;
+
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+            }
+	
+#if 0
+
+                if (i2c_monitor_flag == 1)
+                {
+                    CPLD_read_AFTER();
+                }
+
+#endif
+
+						            // Clear flags and buffers for the next command.
             string_received = 0;
             usb_rcvbuf[0] = 0x0; //clear command
             // Re-enable interrupts.
             __set_PRIMASK(0);
+            }
 
 
-        }
+
+
+        
     }
 
 }

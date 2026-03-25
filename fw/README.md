@@ -58,7 +58,8 @@ The device communicates via 1024-byte HID report packets.
 | Command | Name | Payload Details | Response Details |
 | :--- | :--- | :--- | :--- |
 | `0xa0` | **SVF Init** | None | Returns 1024 bytes of zeros (clears error state). |
-| `0xa1` | **SVF Exec** | `[1...1023]`: SVF command string (ends with `;`) | Returns error line number (4 bytes) or 0 if success. |
+| `0xa1` | **SVF Exec (Final)** | `[1...1023]`: Final or only SVF command packet. Appends payload to internal buffer, processes complete command when `;` terminator is found. | Returns 4-byte error line number (little-endian) or 0 if success. Total response is 1024 bytes. |
+| `0xa2` | **SVF Exec (Continuation)** | `[1...1023]`: Continuation packet for multi-packet SVF commands. Payload is appended to internal buffer (max 8192 bytes) without processing. | No response sent. Host should not read between `0xa2` packets. |
 | `0xb0` | **FW Version** | None | Returns 4-byte version: `0x26, 0x01, 0x14, 0x02`. |
 | `0xb1` | **LDROM Boot** | `[1]=0x5a, [2]=0xa5` | No response (device reboots to LDROM). |
 | `0xb2` | **APROM Reset**| `[1]=0x55, [2]=0xaa` | No response (device reboots to APROM). |

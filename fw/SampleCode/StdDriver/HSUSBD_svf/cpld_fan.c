@@ -646,7 +646,7 @@ int FanIC_CompareAndRestore(void)
 }
 
 
-#define EEPROM_SLAVE_ADDR  0xa0
+#define EEPROM_SLAVE_ADDR  0xa0>>1
 
 
 /**

@@ -1443,6 +1443,92 @@ int handle_reset(int count, int argc, char* argv[]) {
     }
     return -1;
 }
+
+
+
+int handle_gpio(int count, int argc, char* argv[]) {
+    cmd_printf("[CMD] Count=%d, Action=System Reset\n", count);
+    
+    // Operation: GPIO Setval <ionumber> <Value>
+    if (argc == 4 && STR_EQUAL(argv[0], "GPIO") && STR_EQUAL(argv[1], "Setval")) {
+        // Value should be in argv[3]
+        unsigned char gpiovalue = (unsigned char)strtoul(argv[3], NULL, 16);
+        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 16);
+        int is_success = 1;
+        if (usbd_multi_MCU_GPIO_SET(count, gpionumber, gpiovalue) == 0)
+            is_success = 1;
+        else
+            is_success = 0;
+        // 2. Create JSON response
+        cJSON* root = cJSON_CreateObject();
+
+        if (is_success) {
+            cJSON_AddStringToObject(root, "GPIO SET", "PASS");
+        }
+        else {
+            cJSON_AddStringToObject(root, "GPIO SET", "FALSE");
+        }
+
+        // 3. Print and release
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+
+        return 0;
+    }
+
+    if (argc == 3 && STR_EQUAL(argv[0], "GPIO") && STR_EQUAL(argv[1], "Getval")) {
+        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 16);
+        uint8_t GPIO_var = 0;
+        if (usb_multi_gpio_get_var(count, &GPIO_var) != 0)
+        {
+             // Prepare JSON
+            cJSON* root = cJSON_CreateObject();
+
+            char key_buf[64];
+            snprintf(key_buf, sizeof(key_buf), "GPIO%d_VAR", gpionumber);
+
+            // Fill in result (Success/fail)
+            cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+
+
+            // Print and release
+            char* out = cJSON_Print(root);
+            dbg_printf("%s\n", out);
+
+            free(out);
+            cJSON_Delete(root);
+            return -1;
+
+
+        }
+        // Prepare a buffer to store the converted string
+        char var_str_buf[16];
+
+        snprintf(var_str_buf, sizeof(var_str_buf), "0x%02x", GPIO_var);
+
+        // --- cJSON Generation ---
+        cJSON* root = cJSON_CreateObject();
+
+        cJSON_AddStringToObject(root, "VALUE", var_str_buf);
+
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        // Release memory
+        free(out);
+        cJSON_Delete(root);
+
+        return 0;
+    }
+        
+    return -1;
+}
+
+
+
 extern void list_nuvoton_devices(void);
 /**
  * @brief Provides direct I2C bus access for debugging and testing.
@@ -2020,6 +2106,61 @@ int handle_global(int count, int argc, char* argv[]) {
     return 0;
 }
 
+#define fru_bin_size 256
+int is_fru_bin_file(const char* filename)
+{
+    // Validate input
+    if (filename == NULL) {
+        return -1;
+    }
+
+    size_t len = strlen(filename);
+
+    // Check if length is sufficient to contain ".bin" (length 4)
+    if (len < 4) {
+        return -1;
+    }
+
+    // Case-insensitive comparison of extension
+     if (_stricmp(&filename[len - 4], ".bin") == 0) {
+       
+         
+
+         FILE* fp;
+         unsigned int file_size_fru = 0;
+         
+         if ((fp = fopen(filename, "rb")) == NULL)
+         {
+             dbg_printf("APROM FILE OPEN FALSE\n\r");
+             return -1;
+         }
+         if (fp != NULL)
+         {
+             // �ץ�Ū���ɮפj�p���覡
+             fseek(fp, 0, SEEK_END);
+             file_size_fru = ftell(fp);
+             fseek(fp, 0, SEEK_SET);
+             if (file_size_fru > fru_bin_size) {
+                 dbg_printf("APROM FILE SIZE OVER\n\r");
+                 fclose(fp);
+                 return -1;
+             }
+             if (file_size_fru != fru_bin_size) {
+                 dbg_printf("APROM FILE IS SMALL\n\r");
+                 fclose(fp);
+                 return -1;
+             }             
+             fclose(fp);
+             return 0;
+         }
+         else
+         {
+             return -1;
+         }
+     }
+
+    return -1; 
+}
 
 
 /**
@@ -2058,7 +2199,7 @@ int handle_eeprom(int count, int argc, char* argv[]) {
     if (STR_EQUAL(target, "WRITE"))
     {
         // Check file extension
-        if (is_bin_file(filepath) != 0) {
+        if (is_fru_bin_file(filepath) != 0) {
             EEPROM_result = RES_FILE_NO_FOUND;
             snprintf(fail_reason, sizeof(fail_reason), "Invalid File Extension");
             goto create_json; // Jump to JSON generation
@@ -2119,7 +2260,7 @@ cmd_entry_t cmd_table[] = {
     {"Global",    handle_global,     "Global LED Status"},
     // [NEW] Added: register usblist command
     {"usblist",   handle_usblist,    "List USB devices"},
-
+    {"gpio",      handle_gpio,       "SETVAL/ GetVAl PIN <Num> <Value>"},
 
     {"appver",   handle_appversion,    "app verison information"},
     {"dumpall",   handle_dumpall,    "dump all information"},

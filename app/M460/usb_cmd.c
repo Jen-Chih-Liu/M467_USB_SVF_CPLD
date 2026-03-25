@@ -1752,6 +1752,38 @@ unsigned int loc_file_size;
 
             // Execute USB interrupt transfer to send EEPROM write command
             r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_write, PACKET_SIZE, &actual_length, 0); 
+
+            // Send 0xC2 to read back EEPROM content and compare with write buffer
+            if (r == 0)
+            {
+                char cmd_eeprom_read[PACKET_SIZE] = { 0 };
+                unsigned char eeprom_readback[transfer_size] = { 0 };
+
+                cmd_eeprom_read[0] = (char)0xc2;
+                actual_length = 0;
+                r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_read, PACKET_SIZE, &actual_length, 0);
+
+                if (r == 0)
+                {
+                    actual_length = 0;
+                    r = libusb_interrupt_transfer(handle, ep_in, eeprom_readback, sizeof(eeprom_readback), &actual_length, 1000);
+
+                    if (r == 0)
+                    {
+                        if (actual_length < 257 || eeprom_readback[0] != (unsigned char)0xc2)
+                        {
+                            printf("EEPROM readback response invalid, len=%d, cmd=0x%02x\n", actual_length, eeprom_readback[0]);
+                            r = -1;
+                        }
+                        else if (memcmp(W_EEPROM_BUFFER, &eeprom_readback[1], 256) != 0)
+                        {
+                            printf("EEPROM verify failed after write\n");
+                            r = -1;
+                        }
+                    }
+                }
+            }
+
             
             // Release interface and close device handle
             libusb_release_interface(handle, INTERFACE_NUMBER);
@@ -1764,4 +1796,163 @@ unsigned int loc_file_size;
 
     libusb_exit(ctx);
     return (r == 0) ? 0 : 1;
+}
+
+/**
+ * @brief Sends an 0xDC command to control a specific GPIO on the MCU.
+ */
+int usbd_multi_MCU_GPIO_SET(unsigned char usb_cnt, unsigned char gpio_num, unsigned char gpio_val)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0)
+        return 1;
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            int actual_length = 0;
+            char cmd_i2c[PACKET_SIZE] = { 0 };
+            cmd_i2c[0] = (char)0xdc; // GPIO control command prefix            
+            cmd_i2c[1] = gpio_num;   // GPIO number
+            cmd_i2c[2] = gpio_val;   // GPIO value
+            r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_i2c, PACKET_SIZE, &actual_length, 0); 
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
+/**
+ * @brief Reads the firmware version from the device.
+ * 
+ * [Modified] Function declaration: returns int (status), added uint32_t* out_version (output)
+ * 
+ * @param handle USB device handle.
+ * @param ep_out OUT endpoint.
+ * @param ep_in IN endpoint.
+ * @param gpio_val Output pointer for the GPIO value.
+ * @return int 0 on success, -1 on failure.
+ */
+int read_device_gpio_status(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, uint8_t* out_val) {
+    // Prepare and send the command
+    int actual_length = 0;
+    char cmd_version[PACKET_SIZE] = { 0 };
+    cmd_version[0] = (char)0xdd; // read gpio status command prefix
+
+
+    // Perform interrupt transfer to send command
+    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_version, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    if (r < 0) {
+        fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
+        return -1; // [Modified] Send failed -> return -1
+    }
+
+#if 0
+    cmd_version[0] = 0xb0; // read version command
+
+    if (send_string_hid_interrupt(handle, ep_out, cmd_version) != 0) {
+        fprintf(stderr, "Failed to send read version command.\n");
+        return -1; // [Modified] Send failed -> return -1
+    }
+#endif
+    // Prepare the receive buffer
+    unsigned char in_data[transfer_size] = { 0 };
+
+
+    // Read the returned data from the device via interrupt transfer
+    int r_in = libusb_interrupt_transfer(handle, ep_in, in_data, sizeof(in_data), &actual_length, 1000); // 1 second timeout
+
+    if (r_in != 0) {
+        fprintf(stderr, "Error reading version from device: %s\n", libusb_error_name(r_in));
+        return -1; // [Modified] Read failed -> return -1
+    }
+
+    // Check if the returned data length is sufficient
+    // Based on logic, indices 0~3 are needed, so at least 4 bytes must be read.
+    if (actual_length < 4) {
+        fprintf(stderr, "Version response was too short (%d bytes).\n", actual_length);
+        return -1; // [Modified] Insufficient data -> return -1
+    }
+
+    // Convert the received 4 bytes (Big-Endian) to a uint32_t
+    // [Modified] Pass the calculation result back through the pointer.
+    if (out_val != NULL) {
+        *out_val = in_data[1]; // Assuming GPIO value is in the first byte
+    }
+
+    return 0; // [Modified] Pass -> return 0
+}
+
+
+
+/**
+ * @brief Gets the reset variable from a specific USB device.
+ * 
+ * @param usb_cnt Logical index.
+ * @param pReset_var Output pointer.
+ * @return int 0 on success, 1 on failure.
+ */
+int usb_multi_gpio_get_var(unsigned char usb_cnt, unsigned char* pgpio_val)
+{
+ 
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0)
+        return 1;
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            // Retrieve variable
+            r = read_device_gpio_status(handle, ep_out, ep_in, pgpio_val);
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+ 
+    
 }

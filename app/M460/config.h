@@ -107,6 +107,8 @@ extern int usbd_multi_mcu_stop_bmc_monitor(unsigned char usb_cnt);
 extern int usbd_multi_mcu_start_bmc_monitor(unsigned char usb_cnt);
 extern void print_nvme_basic_management_info(uint8_t* data);
 extern int usbd_multi_mcu_eeprom_write(unsigned char usb_cnt, char* filename );
+extern int usbd_multi_MCU_GPIO_SET(unsigned char usb_cnt, unsigned char gpio_num, unsigned char gpio_val);
+extern int usb_multi_gpio_get_var(unsigned char usb_cnt, unsigned char* pgpio_val);
 
 extern void sleep_seconds(double seconds);
 typedef struct {
