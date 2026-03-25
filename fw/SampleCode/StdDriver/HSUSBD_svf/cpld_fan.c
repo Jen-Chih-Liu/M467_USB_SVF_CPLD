@@ -227,7 +227,7 @@ static const FanHwMapping_t ModelA_FanMap[LOGICAL_FAN_MAX_COUNT] =
     [LOGICAL_FAN_13]    = {true, NCT7363Y_ADDR_2, 0,      4},
     [LOGICAL_FAN_14]    = {true, NCT7363Y_ADDR_2, 1,      5},
     [LOGICAL_FAN_15]    = {true, NCT7363Y_ADDR_2, 2,      6},
-    [LOGICAL_FAN_16]    = {true, NCT7363Y_ADDR_2, 3,      7},    
+    [LOGICAL_FAN_16]    = {true, NCT7363Y_ADDR_2, 3,      7},
 };
 
 
@@ -520,7 +520,7 @@ int FanIC_BackupRegisters(void)
         {
             fan_address_0x44_back[reg_index] = data_0x44;
         }
-        
+
 
         // Read register from IC at address 0x46
         if (I2C_ReadReg(NCT7363Y_ADDR_2, (uint8_t)reg_index, &data_0x46) == 0)
@@ -536,6 +536,7 @@ int FanIC_Backup_init(void)
 {
     uint16_t reg_index;
     FanIC_BackupRegisters();
+
     // Read all registers from both fan ICs
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
@@ -553,28 +554,28 @@ static bool Is_Register_ReadOnly(uint8_t reg)
 {
     // GPIO0 Input Port Register
     if (reg == 0x00) return true;
-    
+
     // GPIO0 Interrupt Status Register (R/clr)
     if (reg == 0x07) return true;
-    
+
     // GPIO0 Input Latch Data Register
     if (reg == 0x08) return true;
-    
+
     // GPIO1 Input Port Register
     if (reg == 0x10) return true;
-    
+
     // GPIO1 Interrupt Status Register (R/clr)
     if (reg == 0x17) return true;
-    
+
     // GPIO1 Input Latch Data Register
     if (reg == 0x18) return true;
-    
+
     // FAN Low Speed Interrupt Status Register (R/clr)
     if (reg == 0x32 || reg == 0x33) return true;
-    
+
     // FAN Low Speed Real Status Register
     if (reg == 0x34 || reg == 0x35) return true;
-    
+
     // FANIN Count Value Registers (High and Low bytes for all channels)
     // 48h, 49h (FANIN0); 4Ah, 4Bh (FANIN1); ... 66h, 67h (FANIN15)
     if ((reg >= 0x48 && reg <= 0x67) && ((reg & 0x01) == 0 || (reg & 0x01) == 1))
@@ -582,7 +583,7 @@ static bool Is_Register_ReadOnly(uint8_t reg)
         // This covers 48h-67h range (FANIN0-FANIN15 count values)
         return true;
     }
-    
+
     return false;
 }
 
@@ -597,7 +598,7 @@ int FanIC_CompareAndRestore(void)
 {
     uint16_t reg_index;
     int restore_count = 0;
-    
+
     // Compare and restore registers for IC at address 0x44
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
@@ -606,7 +607,7 @@ int FanIC_CompareAndRestore(void)
         {
             continue;
         }
-        
+
         // Check if current value differs from backup
         if (fan_address_0x44[reg_index] != fan_address_0x44_back[reg_index])
         {
@@ -619,7 +620,7 @@ int FanIC_CompareAndRestore(void)
             }
         }
     }
-    
+
     // Compare and restore registers for IC at address 0x46
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
@@ -628,7 +629,7 @@ int FanIC_CompareAndRestore(void)
         {
             continue;
         }
-        
+
         // Check if current value differs from backup
         if (fan_address_0x46[reg_index] != fan_address_0x46_back[reg_index])
         {
@@ -641,7 +642,7 @@ int FanIC_CompareAndRestore(void)
             }
         }
     }
-    
+
     return restore_count;
 }
 
@@ -652,66 +653,68 @@ int FanIC_CompareAndRestore(void)
 /**
  * @brief   ACK Polling to check if EEPROM write cycle is complete (Not in Busy state)
  * @details After writing data, the EEPROM enters an internal write cycle (Max 5ms).
- * During this time, it will respond with NACK if addressed. 
+ * During this time, it will respond with NACK if addressed.
  * This function continuously sends SLA+W until the EEPROM responds with ACK.
  */
 void EEPROM_WaitReady(void)
 {
-	 uint32_t u32TimeOutCount = 0u;
-	
-    while(1)
+    uint32_t u32TimeOutCount = 0u;
+
+    while (1)
     {
         I2C_START(I2C0);
-        u32TimeOutCount = I2C_TIMEOUT;			
+        u32TimeOutCount = I2C_TIMEOUT;
         I2C_WAIT_READY(I2C0)
         {
-            if(--u32TimeOutCount == 0)
+            if (--u32TimeOutCount == 0)
             {
-                               
+
                 break;
             }
         }
         I2C_SET_DATA(I2C0, (EEPROM_SLAVE_ADDR << 1) | 0x00);
         I2C_SET_CONTROL_REG(I2C0, I2C_CTL_SI);
-			  u32TimeOutCount = I2C_TIMEOUT;
+        u32TimeOutCount = I2C_TIMEOUT;
         I2C_WAIT_READY(I2C0)
-			  {
-            if(--u32TimeOutCount == 0)
+        {
+            if (--u32TimeOutCount == 0)
             {
-                               
+
                 break;
             }
         }
-		
-        if (I2C_GET_STATUS(I2C0) == 0x18) 
+
+        if (I2C_GET_STATUS(I2C0) == 0x18)
         {
             /* Received ACK (0x18), EEPROM has completed the write cycle and is ready */
             I2C_STOP(I2C0);
-					u32TimeOutCount = I2C_TIMEOUT;
-    while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
-    {
-        if(--u32TimeOutCount == 0)
-        {
-          
+            u32TimeOutCount = I2C_TIMEOUT;
+
+            while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
+            {
+                if (--u32TimeOutCount == 0)
+                {
+
+                    break;
+                }
+            }
+
+
             break;
         }
-    }
-					
-					
-            break;
-        }
-        
+
         /* Received NACK (0x20), send STOP and delay slightly before retrying */
         I2C_STOP(I2C0);
         u32TimeOutCount = I2C_TIMEOUT;
-    while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
-    {
-        if(--u32TimeOutCount == 0)
+
+        while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
         {
-          
-            break;
+            if (--u32TimeOutCount == 0)
+            {
+
+                break;
+            }
         }
-    }
     }
 }
 
@@ -722,14 +725,14 @@ void EEPROM_WaitReady(void)
 void EEPROM_WritePage(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
 {
     /* Create transmit buffer: 1 Byte memory address + up to 16 Bytes of data */
-    uint8_t u8TxBuf[17]; 
+    uint8_t u8TxBuf[17];
     uint32_t i;
 
     /* Place the internal memory address at index 0 */
     u8TxBuf[0] = u8DataAddr;
-    
+
     /* Copy the data to be written right after the address */
-    for(i = 0; i < u32Len; i++)
+    for (i = 0; i < u32Len; i++)
     {
         u8TxBuf[i + 1] = pu8Data[i];
     }
@@ -738,7 +741,7 @@ void EEPROM_WritePage(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
     I2C_WriteMultiBytes(I2C0, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
 
     /* Wait for the EEPROM to burn the buffer data into non-volatile memory */
-    EEPROM_WaitReady(); 
+    EEPROM_WaitReady();
 }
 
 /**
@@ -756,10 +759,10 @@ void EEPROM_WriteData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
     {
         /* Calculate remaining space in the current page (16 Bytes per page) */
         u32PageSpace = 16 - (u8DataAddr % 16);
-        
+
         /* Determine how many bytes to write this time (min of remaining len & page space) */
         u32WriteLen = (u32Len < u32PageSpace) ? u32Len : u32PageSpace;
-        
+
         /* Call the page write function */
         EEPROM_WritePage(u8DataAddr, pu8Data, u32WriteLen);
 

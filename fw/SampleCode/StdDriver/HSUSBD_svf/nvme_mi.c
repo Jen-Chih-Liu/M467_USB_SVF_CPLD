@@ -91,9 +91,10 @@ void nvm_mi_read(void)
     uint8_t *pu8Dest;
     const uint8_t u8MuxCount = sizeof(s_au8_PCA9848_Addr) / sizeof(s_au8_PCA9848_Addr[0]);
     const uint8_t u8ChannelsPerMux = 8; // Each TCA9548 has 8 channels
-if (bmc_report[cpld_hdd_amount] ==0xff)
-	return;
-	
+
+    if (bmc_report[cpld_hdd_amount] == 0xff)
+        return;
+
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
     GPIO_SetMode(PA, BIT9, GPIO_MODE_OUTPUT);
     HWM_SEL = 0;

@@ -484,6 +484,16 @@
               <FileType>1</FileType>
               <FilePath>..\..\..\..\Library\StdDriver\src\i2c.c</FilePath>
             </File>
+            <File>
+              <FileName>eadc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\Library\StdDriver\src\eadc.c</FilePath>
+            </File>
+            <File>
+              <FileName>usci_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\..\..\Library\StdDriver\src\usci_i2c.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

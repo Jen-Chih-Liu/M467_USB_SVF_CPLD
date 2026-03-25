@@ -13,7 +13,7 @@
 #include "libusb\include\libusb.h"
 #include "config.h"
 #define last_check 1
-#define dump_svf_log 0
+#define dump_svf_log 1
 
 typedef struct {
     char** commands;
@@ -124,18 +124,18 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
         const char* original_cmd = svf.commands[i];
         size_t original_len = strlen(original_cmd);
 
-        // --- ©R¥O«Ê¥]²Õ¸Ë»Pµo°e¡]¤ä´©¶W¹L 1023 byte ªº¤j«¬ SVF ©R¥O¡^---
+        // --- ï¿½Rï¿½Oï¿½Ê¥]ï¿½Õ¸Ë»Pï¿½oï¿½eï¿½]ï¿½ä´©ï¿½Wï¿½L 1023 byte ï¿½ï¿½ï¿½jï¿½ï¿½ SVF ï¿½Rï¿½Oï¿½^---
         //
-        // ¨ó©w:
-        //   0xa2  = Continuation packet (¤¤¶¡¬q¡A¤£§t ';')
+        // ï¿½ï¿½w:
+        //   0xa2  = Continuation packet (ï¿½ï¿½ï¿½ï¿½ï¿½qï¿½Aï¿½ï¿½ï¿½t ';')
         //           Payload: bytes[1..1023] = SVF text fragment
-        //           Firmware: °l¥[¨ì½w½Ä°Ï¡A¤£³B²z¡A¤£¦^À³
-        //   0xa1  = Final (or only) packet (§t ';')
-        //           Payload: bytes[1..1023] = SVF text (§tµ²§À ';')
-        //           Firmware: °l¥[«á¸ÑªR°õ¦æ¡A¦^¶Çµ²ªG
+        //           Firmware: ï¿½lï¿½[ï¿½ï¿½wï¿½Ä°Ï¡Aï¿½ï¿½ï¿½Bï¿½zï¿½Aï¿½ï¿½ï¿½^ï¿½ï¿½
+        //   0xa1  = Final (or only) packet (ï¿½t ';')
+        //           Payload: bytes[1..1023] = SVF text (ï¿½tï¿½ï¿½ï¿½ï¿½ ';')
+        //           Firmware: ï¿½lï¿½[ï¿½ï¿½ÑªRï¿½ï¿½ï¿½ï¿½Aï¿½^ï¿½Çµï¿½ï¿½G
         //
-        // ¨C­Ó USB «Ê¥]©T©w PACKET_SIZE (1024) bytes¡A
-        // ¨ä¤¤ byte[0] ¬°©R¥O½X¡Abyte[1..1023] ¬° payload (³Ì¦h 1023 bytes)¡C
+        // ï¿½Cï¿½ï¿½ USB ï¿½Ê¥]ï¿½Tï¿½w PACKET_SIZE (1024) bytesï¿½A
+        // ï¿½ä¤¤ byte[0] ï¿½ï¿½ï¿½Rï¿½Oï¿½Xï¿½Abyte[1..1023] ï¿½ï¿½ payload (ï¿½Ì¦h 1023 bytes)ï¿½C
 #define SVF_PAYLOAD_SIZE  1023
         {
             size_t offset = 0;
@@ -214,7 +214,17 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
                 sleep_seconds_svf(seconds);
             }
 #endif
-#if 1
+            
+            // If the previous SVF command is an "SDR 2080" command, override the delay to 0.05 s
+            double sleep_time = seconds;
+            if (i > 0 && svf.commands[i - 1] != NULL) {
+                const char* prev_cmd = svf.commands[i - 1];
+                if (strstr(prev_cmd, "SDR") != NULL && strstr(prev_cmd, "2080") != NULL) {
+                    sleep_time = 0.05;
+                }
+            }
+            sleep_seconds_svf(sleep_time);
+#if 0
             if (i < ((svf.count * 2) / 3))
             {
                 //if (seconds >= 0.05) {
@@ -232,7 +242,7 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
 #endif
         }
 
-        // --- ¶g´Á©ÊÀË¬d (Periodic Check) ---
+        // --- ï¿½gï¿½ï¿½ï¿½ï¿½ï¿½Ë¬d (Periodic Check) ---
         if ((i + 1) % 500 == 0) {
             uint32_t error_code = check_device_status(handle, ep_in);
             if (error_code != 0) {

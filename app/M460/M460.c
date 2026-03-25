@@ -1452,8 +1452,8 @@ int handle_gpio(int count, int argc, char* argv[]) {
     // Operation: GPIO Setval <ionumber> <Value>
     if (argc == 4 && STR_EQUAL(argv[0], "GPIO") && STR_EQUAL(argv[1], "Setval")) {
         // Value should be in argv[3]
-        unsigned char gpiovalue = (unsigned char)strtoul(argv[3], NULL, 16);
-        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 16);
+        unsigned char gpiovalue = (unsigned char)strtoul(argv[3], NULL, 10);
+        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 10);
         int is_success = 1;
         if (usbd_multi_MCU_GPIO_SET(count, gpionumber, gpiovalue) == 0)
             is_success = 1;
@@ -1480,9 +1480,9 @@ int handle_gpio(int count, int argc, char* argv[]) {
     }
 
     if (argc == 3 && STR_EQUAL(argv[0], "GPIO") && STR_EQUAL(argv[1], "Getval")) {
-        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 16);
+        unsigned char gpionumber = (unsigned char)strtoul(argv[2], NULL, 10);
         uint8_t GPIO_var = 0;
-        if (usb_multi_gpio_get_var(count, &GPIO_var) != 0)
+        if (usb_multi_gpio_get_var(count, gpionumber, &GPIO_var) != 0)
         {
              // Prepare JSON
             cJSON* root = cJSON_CreateObject();

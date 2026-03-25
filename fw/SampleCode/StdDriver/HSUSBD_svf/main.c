@@ -13,6 +13,7 @@
 #include <string.h>
 #include "g_def.h"
 volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) = {0};
+volatile uint8_t bmc_report1[1024] __attribute__((aligned(4))) = {0};
 extern volatile uint8_t string_received;
 extern volatile uint8_t svf_string_rcvbuf[8192] __attribute__((aligned(4)));
 #define SVF_BUF_LENGTH 8192
@@ -95,6 +96,8 @@ void SYS_Init(void)
     /* Enable I2C0 clock */
     CLK_EnableModuleClock(I2C0_MODULE);
     CLK_EnableModuleClock(I2C1_MODULE);
+    CLK_EnableModuleClock(I2C2_MODULE);
+    CLK_EnableModuleClock(USCI0_MODULE);
     CLK_EnableModuleClock(I2C4_MODULE);
     CLK_EnableModuleClock(TMR0_MODULE);
 
@@ -109,21 +112,40 @@ void SYS_Init(void)
     SET_UART3_TXD_PB15() ; // for dump message
 
     /* Set I2C0 multi-function pins */
+    //CPLD0
     SET_I2C0_SDA_PB4();
     SET_I2C0_SCL_PB5();
     PB->SMTEN |= GPIO_SMTEN_SMTEN4_Msk | GPIO_SMTEN_SMTEN5_Msk ;
 
+    //NVME0
     SET_I2C1_SDA_PB0();
     SET_I2C1_SCL_PB1();
     PB->SMTEN |= GPIO_SMTEN_SMTEN0_Msk | GPIO_SMTEN_SMTEN1_Msk ;
 
+    //CPLD 2
+    SET_I2C2_SDA_PA10();
+    SET_I2C2_SCL_PA11();
+    PA->SMTEN |= GPIO_SMTEN_SMTEN10_Msk | GPIO_SMTEN_SMTEN11_Msk ;
+
+    //NVME0
+    SET_USCI0_DAT0_PB13(); //I2C DATA
+    SET_USCI0_CLK_PB12(); //I2C CLK
+    PB->SMTEN |= GPIO_SMTEN_SMTEN12_Msk | GPIO_SMTEN_SMTEN13_Msk ;
 
 
+    //for bmc master
     SET_I2C4_SDA_PF4();
     SET_I2C4_SCL_PF5();
     PF->SMTEN |= GPIO_SMTEN_SMTEN4_Msk | GPIO_SMTEN_SMTEN5_Msk ;
 
+    /* Enable EADC0 module clock */
+    CLK_EnableModuleClock(EADC0_MODULE);
 
+    /* Set EADC0 clock divider as 12 */
+    CLK_SetModuleClock(EADC0_MODULE, CLK_CLKSEL0_EADC0SEL_PLL_DIV2, CLK_CLKDIV0_EADC0(12));
+
+    SET_EADC0_CH7_PB7();
+    GPIO_DISABLE_DIGITAL_PATH(PB, BIT7);
     /* Lock protected registers */
 
     SystemCoreClockUpdate();
@@ -145,6 +167,51 @@ void I2C0_Init(void)
     printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C0));
 }
 
+void I2C1_Init(void)
+{
+
+    /* Open I2C1 and set clock to 100k */
+    I2C_Open(I2C1, 100000);
+
+    /* Get I2C1 Bus Clock */
+    printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C1));
+
+}
+
+void UI2C0_Init(void)
+{
+    /* Open USCI_I2C0 and set clock to 100k */
+    UI2C_Open(UI2C0, 100000);
+
+    /* Get UI2C0 Bus Clock */
+    printf("UI2C clock %d Hz\n", UI2C_GetBusClockFreq(UI2C0));
+
+    /* Set UI2C1 Slave Addresses */
+    // UI2C_SetSlaveAddr(UI2C0, 0, 0x15, UI2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
+
+    //UI2C_ENABLE_PROT_INT(UI2C0, (UI2C_PROTIEN_ACKIEN_Msk | UI2C_PROTIEN_NACKIEN_Msk | UI2C_PROTIEN_STORIEN_Msk | UI2C_PROTIEN_STARIEN_Msk));
+    //NVIC_EnableIRQ(USCI0_IRQn);
+}
+
+
+/**
+ * @brief  I2C2 Interface Initialization.
+ * @param  None
+ * @return None
+ */
+void I2C2_Init(void)
+{
+
+    /* Open I2C0 and set clock to 100k */
+    I2C_Open(I2C2, 100000);
+
+    /* Get I2C0 Bus Clock */
+    printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C2));
+
+}
+
+
+
 
 void I2C4_Init(void)
 {
@@ -154,11 +221,11 @@ void I2C4_Init(void)
 
     /* Get I2C0 Bus Clock */
     printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
-	
-	
-		I2C_SetSlaveAddr(I2C4, 0, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
+
+
+    I2C_SetSlaveAddr(I2C4, 0, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
     I2C_SetSlaveAddr(I2C4, 1, 0x46, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
-    
+
     I2C_EnableInt(I2C4);
     NVIC_EnableIRQ(I2C4_IRQn);
 }
@@ -174,7 +241,7 @@ void I2C4_IRQHandler(void)
 
     u32Status = I2C_GET_STATUS(I2C4);
 
-    if(I2C_GET_TIMEOUT_FLAG(I2C4))
+    if (I2C_GET_TIMEOUT_FLAG(I2C4))
     {
         /* Clear I2C4 Timeout Flag */
         I2C_ClearTimeoutFlag(I2C4);
@@ -182,106 +249,111 @@ void I2C4_IRQHandler(void)
     }
     else
     {
-        if(s_I2C4HandlerFn != NULL)
+        if (s_I2C4HandlerFn != NULL)
             s_I2C4HandlerFn(u32Status);
     }
 }
 
-volatile unsigned char fan_address_index=0;
-volatile unsigned char fan_reg_index=0;
-volatile unsigned char fan_address_0x44[0xff]={0};
-volatile unsigned char fan_address_0x46[0xff]={0};
-volatile unsigned char g_au8SlvData[32]={0};
+volatile unsigned char fan_address_index = 0;
+volatile unsigned char fan_reg_index = 0;
+volatile unsigned char fan_address_0x44[0xff] = {0};
+volatile unsigned char fan_address_0x46[0xff] = {0};
+volatile unsigned char g_au8SlvData[32] = {0};
 volatile uint8_t g_u8SlvDataLen = 0;
 volatile uint8_t g_u8SlvTRxAbortFlag = 0;
 void I2C_SlaveTRx(uint32_t u32Status)
 {
     uint8_t u8data;
-    if(u32Status == 0x60)                       /* Own SLA+W has been receive; ACK has been return */
+
+    if (u32Status == 0x60)                      /* Own SLA+W has been receive; ACK has been return */
     {
         g_u8SlvDataLen = 0;
-        fan_address_index=I2C_GET_DATA(I2C4)>>1;
+        fan_address_index = I2C_GET_DATA(I2C4) >> 1;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if(u32Status == 0x80)                 /* Previously address with own SLA address
+    else if (u32Status == 0x80)                 /* Previously address with own SLA address
                                                    Data has been received; ACK has been returned*/
     {
         u8data = (unsigned char) I2C_GET_DATA(I2C4);
 
         g_au8SlvData[g_u8SlvDataLen++] = u8data;
-                
+
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if(u32Status == 0xA8)                  /* Own SLA+R has been receive; ACK has been return */
+    else if (u32Status == 0xA8)                 /* Own SLA+R has been receive; ACK has been return */
     {
-        fan_address_index=I2C_GET_DATA(I2C4)>>1;
-        if (fan_address_index==(0x44>>1))
-        {           
-            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);        
-        } 
-        else if (fan_address_index==(0x46>>1))
+        fan_address_index = I2C_GET_DATA(I2C4) >> 1;
+
+        if (fan_address_index == (0x44 >> 1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
+        }
+        else if (fan_address_index == (0x46 >> 1))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
+
         fan_reg_index++;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if(u32Status == 0xB8)                  /* Data byte in I2CDAT has been transmitted ACK has been received */
+    else if (u32Status == 0xB8)                 /* Data byte in I2CDAT has been transmitted ACK has been received */
     {
-         if (fan_address_index==(0x44>>1))
-        {           
-            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);        
-        } 
-        else if (fan_address_index==(0x46>>1))
+        if (fan_address_index == (0x44 >> 1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
+        }
+        else if (fan_address_index == (0x46 >> 1))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
+
         fan_reg_index++;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
     }
-    else if(u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
+    else if (u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
                                                    Not ACK has been received */
     {
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if(u32Status == 0x88)                 /* Previously addressed with own SLA address; NOT ACK has
+    else if (u32Status == 0x88)                 /* Previously addressed with own SLA address; NOT ACK has
                                                    been returned */
     {
         g_u8SlvDataLen = 0;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if(u32Status == 0xA0)                 /* A STOP or repeated START has been received while still
+    else if (u32Status == 0xA0)                 /* A STOP or repeated START has been received while still
                                              addressed as Slave/Receiver*/
     {
-        if (g_u8SlvDataLen==3)
+        if (g_u8SlvDataLen == 3)
         {
-            if (fan_address_index==(0x44>>1))
+            if (fan_address_index == (0x44 >> 1))
             {
-                fan_address_0x44[g_au8SlvData[0]]=g_au8SlvData[1];
-                fan_address_0x44[g_au8SlvData[0]+1]=g_au8SlvData[2];
+                fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
+                fan_address_0x44[g_au8SlvData[0] + 1] = g_au8SlvData[2];
             }
-            else if (fan_address_index==(0x46>>1))
+            else if (fan_address_index == (0x46 >> 1))
             {
-                fan_address_0x46[g_au8SlvData[0]]=g_au8SlvData[1];
-                fan_address_0x46[g_au8SlvData[0]+1]=g_au8SlvData[2];
-            }   
+                fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
+                fan_address_0x46[g_au8SlvData[0] + 1] = g_au8SlvData[2];
+            }
         }
-            else if (g_u8SlvDataLen==1)
-            {
-                fan_reg_index = g_au8SlvData[0];
-            }
-        
+        else if (g_u8SlvDataLen == 1)
+        {
+            fan_reg_index = g_au8SlvData[0];
+        }
+
         g_u8SlvDataLen = 0;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
     else
     {
         printf("[SlaveTRx] Status [0x%x] Unexpected abort!!\n", u32Status);
-        if(u32Status == 0x68)               /* Slave receive arbitration lost, clear SI */
+
+        if (u32Status == 0x68)              /* Slave receive arbitration lost, clear SI */
         {
             I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
         }
-        else if(u32Status == 0xB0)          /* Address transmit arbitration lost, clear SI  */
+        else if (u32Status == 0xB0)         /* Address transmit arbitration lost, clear SI  */
         {
             I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
         }
@@ -290,28 +362,15 @@ void I2C_SlaveTRx(uint32_t u32Status)
             I2C_SET_CONTROL_REG(I2C4, I2C_CTL_STO_SI);
             I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI);
         }
+
         g_u8SlvTRxAbortFlag = 1;
     }
+
     I2C_WAIT_SI_CLEAR(I2C4);
 }
 
 
 
-/**
- * @brief  I2C1 Interface Initialization.
- * @param  None
- * @return None
- */
-void I2C1_Init(void)
-{
-
-    /* Open I2C0 and set clock to 100k */
-    I2C_Open(I2C1, 100000);
-
-    /* Get I2C0 Bus Clock */
-    printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C1));
-
-}
 
 /**
  * @brief  Timer0 Interrupt Handler.
@@ -329,7 +388,12 @@ void TMR0_IRQHandler(void)
     }
 }
 
-
+volatile uint32_t g_u32AdcIntFlag = 0;
+void EADC00_IRQHandler(void)
+{
+    g_u32AdcIntFlag = 1;
+    EADC_CLR_INT_FLAG(EADC0, EADC_STATUS2_ADIF0_Msk);      /* Clear the A/D ADINT0 interrupt flag */
+}
 /**
  * @brief  Main function.
  * @param  None
@@ -381,7 +445,8 @@ int main(void)
 
     I2C0_Init();
     I2C1_Init();
-
+    I2C2_Init();
+    UI2C0_Init();
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
     response_buff[0] = 0;
@@ -403,14 +468,31 @@ int main(void)
     NVIC_EnableIRQ(TMR0_IRQn);
     TIMER_Start(TIMER0);
     // Initialize the fan controller.
-   // fan_inital();
+    // fan_inital();
     //FanIC_Backup_init();
-   // I2C4_Init();
- //   s_I2C4HandlerFn = I2C_SlaveTRx;
-   // I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
-      //smbus sel
-   GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
-		
+    // I2C4_Init();
+    //   s_I2C4HandlerFn = I2C_SlaveTRx;
+    // I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    //smbus sel
+    GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
+
+    //9848 SMBus reset
+    GPIO_SetMode(PB, BIT6, GPIO_MODE_OUTPUT);
+    EADC_Open(EADC0, EADC_CTL_DIFFEN_SINGLE_END);
+    EADC_ConfigSampleModule(EADC0, 0, EADC_ADINT0_TRIGGER, 7);
+    EADC_CLR_INT_FLAG(EADC0, EADC_STATUS2_ADIF0_Msk);
+    EADC_ENABLE_INT(EADC0, BIT0);//Enable sample module  A/D ADINT0 interrupt.
+    EADC_ENABLE_SAMPLE_MODULE_INT(EADC0, 0, BIT0);//Enable sample module 0 interrupt.
+    NVIC_EnableIRQ(EADC00_IRQn);
+    g_u32AdcIntFlag = 0;
+    EADC_START_CONV(EADC0, BIT0);
+
+    while (g_u32AdcIntFlag == 0);
+
+    unsigned int adc_val = EADC_GET_CONV_DATA(EADC0, 1);
+    NVIC_DisableIRQ(EADC00_IRQn);
+    EADC_Close(EADC0);
+
     // Main application loop.
     while (1)
     {
@@ -419,10 +501,11 @@ int main(void)
         if (timer0_count > 500)
         {
 #if 1
+
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
-               // FanIC_BackupRegisters();
+                // FanIC_BackupRegisters();
                 //FanIC_CompareAndRestore();
                 CPLD_read();          // Read CPLD status.
                 //fan_read();           // Read fan speed and duty cycle.
@@ -476,12 +559,15 @@ int main(void)
             if (usb_rcvbuf[0] == 0xa2)
             {
                 uint16_t k;
+
                 for (k = 0; k < 1023; k++)
                 {
                     if ((uint32_t)(buffer_index + k) >= SVF_BUF_LENGTH - 1)
                         break; /* guard against overflow */
+
                     svf_string_rcvbuf[buffer_index + k] = usb_rcvbuf[k + 1];
                 }
+
                 buffer_index = (uint16_t)(buffer_index + k);
                 /* No response sent �V host does not read between 0xa2 packets */
             }
@@ -572,7 +658,7 @@ int main(void)
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x03;
-                response_buff[2] = 0x24;
+                response_buff[2] = 0x25;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
@@ -679,28 +765,28 @@ int main(void)
             }
 
 
-			// Command 0xc1: programming eeprom
+            // Command 0xc1: programming eeprom
             if (usb_rcvbuf[0] == 0xc1)
             {
-                
-							 EEPROM_WriteData(0x00, &usb_rcvbuf[1], 256);            
-						}
-						
-						//command 0xc2 read: eeprom
-						if (usb_rcvbuf[0] == 0xc2)
+
+                EEPROM_WriteData(0x00, &usb_rcvbuf[1], 256);
+            }
+
+            //command 0xc2 read: eeprom
+            if (usb_rcvbuf[0] == 0xc2)
             {
-                  response_buff[0] = 0xc2;
-							  EEPROM_ReadData(0x00, &response_buff[1], 256);
-							 
-							 for (i = 0; i < 1024; i++)
+                response_buff[0] = 0xc2;
+                EEPROM_ReadData(0x00, &response_buff[1], 256);
+
+                for (i = 0; i < 1024; i++)
                 {
                     HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
                 }
 
                 HSUSBD->EP[EPA].EPTXCNT = 1024;
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
-							
-							
+
+
             }
 
             // Command 0xd0: I2C write.
@@ -853,25 +939,41 @@ int main(void)
                 HSUSBD->EP[EPA].EPTXCNT = 1024;
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
             }
-						
-						
-						           
+
+
+            //set pc14
             if (usb_rcvbuf[0] == 0xdc)
             {
-							
-                PC14 = usb_rcvbuf[2];
-							if (PC14==0)
-							{
-                   CPLD_read();   
-	            }
-}			
-	
-	            // Command 0xdb: Get the status of the I2C monitoring flag.
+
+                if (usb_rcvbuf[1] == 40)
+                {
+                    PC14 = usb_rcvbuf[2];
+
+                    if (PC14 == 0)
+                    {
+                        CPLD_read();
+                    }
+                }
+
+                if (usb_rcvbuf[1] == 48)
+                {
+                    PB6 = usb_rcvbuf[2];
+                }
+
+
+            }
+
+            // Command 0xdb: Get the status of the I2C monitoring flag.
             if (usb_rcvbuf[0] == 0xdd)
             {
 
                 response_buff[0] = 0xdd;
-                response_buff[1] = PC14;
+
+                if (usb_rcvbuf[1] == 40)
+                    response_buff[1] = PC14;
+
+                if (usb_rcvbuf[1] == 48)
+                    response_buff[1] = PB6;
 
                 for (i = 0; i < 1024; i++)
                 {
@@ -881,27 +983,27 @@ int main(void)
                 HSUSBD->EP[EPA].EPTXCNT = 1024;
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
             }
-	
+
 #if 0
 
-                if (i2c_monitor_flag == 1)
-                {
-                    CPLD_read_AFTER();
-                }
+            if (i2c_monitor_flag == 1)
+            {
+                CPLD_read_AFTER();
+            }
 
 #endif
 
-						            // Clear flags and buffers for the next command.
+            // Clear flags and buffers for the next command.
             string_received = 0;
             usb_rcvbuf[0] = 0x0; //clear command
             // Re-enable interrupts.
             __set_PRIMASK(0);
-            }
+        }
 
 
 
 
-        
+
     }
 
 }

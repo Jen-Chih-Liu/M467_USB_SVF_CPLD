@@ -1855,12 +1855,12 @@ int usbd_multi_MCU_GPIO_SET(unsigned char usb_cnt, unsigned char gpio_num, unsig
  * @param gpio_val Output pointer for the GPIO value.
  * @return int 0 on success, -1 on failure.
  */
-int read_device_gpio_status(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, uint8_t* out_val) {
+int read_device_gpio_status(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,uint8_t GPIONUM,uint8_t* out_val) {
     // Prepare and send the command
     int actual_length = 0;
     char cmd_version[PACKET_SIZE] = { 0 };
     cmd_version[0] = (char)0xdd; // read gpio status command prefix
-
+    cmd_version[1] = GPIONUM;    // GPIO number
 
     // Perform interrupt transfer to send command
     int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_version, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
@@ -1914,9 +1914,8 @@ int read_device_gpio_status(libusb_device_handle* handle, uint8_t ep_out, uint8_
  * @param pReset_var Output pointer.
  * @return int 0 on success, 1 on failure.
  */
-int usb_multi_gpio_get_var(unsigned char usb_cnt, unsigned char* pgpio_val)
+int usb_multi_gpio_get_var(unsigned char usb_cnt, uint8_t gpionumber, unsigned char* pgpio_val)
 {
- 
     libusb_context* ctx = NULL;
     libusb_device** devs;
     libusb_device_handle* handle = NULL;
@@ -1943,7 +1942,7 @@ int usb_multi_gpio_get_var(unsigned char usb_cnt, unsigned char* pgpio_val)
     {
         if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
             // Retrieve variable
-            r = read_device_gpio_status(handle, ep_out, ep_in, pgpio_val);
+            r = read_device_gpio_status(handle, ep_out, ep_in,gpionumber ,pgpio_val);
             libusb_release_interface(handle, INTERFACE_NUMBER);
             libusb_close(handle);
         }
