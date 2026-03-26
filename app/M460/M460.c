@@ -130,7 +130,9 @@ int handle_cpld(int count, int argc, char* argv[]) {
         
         // Read board data structure from MCU via USB
         M463_BoardData_t boardInfo;
+        M463_BoardData_t boardInfo1;
         memset(&boardInfo, 0, sizeof(boardInfo)); // Initialize to zero
+        memset(&boardInfo1, 0, sizeof(boardInfo)); // Initialize to zero
         int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
         if (ret != 0)
         {
@@ -154,21 +156,51 @@ int handle_cpld(int count, int argc, char* argv[]) {
             return -1;
         }
 
+        int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+        if (ret1 != 0)
+        {
+            // Prepare JSON
+            cJSON* root = cJSON_CreateObject();
+
+            // Dynamically generate Key: "CPLD ID"
+            char key_buf[64];
+            snprintf(key_buf, sizeof(key_buf), "CPLD_1 ID");
+
+            // Fill in result (Success/fail)
+            cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+            
+
+            // Print and release
+            char* out = cJSON_Print(root);
+            json_printf("%s\n", out);
+
+            free(out);
+            cJSON_Delete(root);
+            return -1;
+        }
+
         
 
         // Prepare a buffer to store the converted string
         char id_str_buf[16];
-
+        char id_str_buf1[16];
         // Format hex value as string
         // %02x : Output "2a" (padded with 0 if < 16, e.g., 0x0a -> "0a")
         // 0x%x : Output "0x2a"
         snprintf(id_str_buf, sizeof(id_str_buf), "0x%x", boardInfo.jtag_id);
-
+        if (boardInfo1.cpld_version != 0x0 && boardInfo1.cpld_version != 0xff)
+        {
+        snprintf(id_str_buf1, sizeof(id_str_buf1), "0x%x", boardInfo1.jtag_id);
+        }
         // --- cJSON Generation ---
         cJSON* root = cJSON_CreateObject();
 
         // Note: Use AddString because Hex must be a string in JSON
         cJSON_AddStringToObject(root, "CPLD_ID", id_str_buf);
+        if (boardInfo1.cpld_version != 0x0 && boardInfo1.cpld_version != 0xff)
+        {
+            cJSON_AddStringToObject(root, "CPLD1_ID", id_str_buf1);
+        }
 
         char* out = cJSON_Print(root);
         json_printf("%s\n", out);
@@ -185,9 +217,34 @@ int handle_cpld(int count, int argc, char* argv[]) {
         cmd_printf("[CMD] Count=%d, Action=Read CPLD Version\n", count);
 
         M463_BoardData_t boardInfo;
+         M463_BoardData_t boardInfo1;
         memset(&boardInfo, 0, sizeof(boardInfo)); // Initialize to zero
+        memset(&boardInfo1, 0, sizeof(boardInfo1)); // Initialize to zero
         int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
+         
         if (ret != 0)
+        {
+            // Prepare JSON
+            cJSON* root = cJSON_CreateObject();
+
+            char key_buf[64];
+            snprintf(key_buf, sizeof(key_buf), "CPLD Version");
+
+            // Fill in result (Success/fail)
+            cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+
+
+            // Print and release
+            char* out = cJSON_Print(root);
+            json_printf("%s\n", out);
+
+            free(out);
+            cJSON_Delete(root);
+            return -1;
+        }
+       
+        int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+        if (ret1 != 0)
         {
             // Prepare JSON
             cJSON* root = cJSON_CreateObject();
@@ -210,16 +267,23 @@ int handle_cpld(int count, int argc, char* argv[]) {
 
         // Prepare a buffer to store the converted string
         char version_str_buf[16];
-
+ char version_str_buf1[16];
         // Format hex value as string
         snprintf(version_str_buf, sizeof(version_str_buf), "0x%02x", boardInfo.cpld_version);
+        if (boardInfo1.cpld_version != 0x0 && boardInfo1.cpld_version != 0xff)
+        {
+        snprintf(version_str_buf1, sizeof(version_str_buf1), "0x%02x", boardInfo1.cpld_version);
+        }
 
         // --- cJSON Generation ---
         cJSON* root = cJSON_CreateObject();
 
         // Note: Use AddString because Hex must be a string in JSON
         cJSON_AddStringToObject(root, "CPLD_Version", version_str_buf);
-
+ if (boardInfo1.cpld_version != 0x0 && boardInfo1.cpld_version != 0xff)
+        {
+            cJSON_AddStringToObject(root, "CPLD1_Version", version_str_buf1);
+        }
         char* out = cJSON_Print(root);
         json_printf("%s\n", out);
 
@@ -443,6 +507,8 @@ int do_hdd_info(int count, int argc, char* argv[]) {
     // Read board data structure containing NVMe slot information
     M463_BoardData_t boardInfo;
     memset(&boardInfo, 0, sizeof(boardInfo));
+    M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1));
 
     int ret = usb_read_multi_bmc((unsigned char)count, &boardInfo);
     if (ret != 0)
@@ -465,6 +531,28 @@ int do_hdd_info(int count, int argc, char* argv[]) {
         cJSON_Delete(root);
         return -1;
     }
+ int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+    if (ret1 != 0)
+    {
+        // Prepare JSON
+        cJSON* root = cJSON_CreateObject();
+
+        char key_buf[64];
+        snprintf(key_buf, sizeof(key_buf), "hdd info");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+
+
+        // Print and release
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
 
     // 2. Create JSON root object
     cJSON* root = cJSON_CreateObject();
@@ -542,6 +630,90 @@ int do_hdd_info(int count, int argc, char* argv[]) {
     dbg_printf("%s\n", out);
     free(out);
     cJSON_Delete(root);
+
+
+
+
+    // 2. Create JSON root object
+    cJSON* root1 = cJSON_CreateObject();
+    int total_slots1 = boardInfo.hdd_amount;
+    cJSON_AddNumberToObject(root1, "NVMECount", total_slots1);
+
+    // 3. Prepare pointer array
+    uint8_t* slot_ptrs1[] = {
+        boardInfo.nvme_slot_0,
+        boardInfo.nvme_slot_1,
+        boardInfo.nvme_slot_2,
+        boardInfo.nvme_slot_3,
+        boardInfo.nvme_slot_4,
+        boardInfo.nvme_slot_5,
+        boardInfo.nvme_slot_6,
+        boardInfo.nvme_slot_7,
+        boardInfo.nvme_slot_8,
+        boardInfo.nvme_slot_9,
+        boardInfo.nvme_slot_10,
+        boardInfo.nvme_slot_11,
+        boardInfo.nvme_slot_12,
+        boardInfo.nvme_slot_13,
+        boardInfo.nvme_slot_14,
+        boardInfo.nvme_slot_15,
+    };
+
+    char key_buf1[16];
+    char sn_buf1[21];   // SN max 20 + null
+
+    // 4. Iterate through each slot and parse
+    for (int i = 0; i < total_slots1; i++) {
+        uint8_t* raw_data1 = slot_ptrs1[i];
+        cJSON* drive_obj1 = cJSON_CreateObject();
+
+        // ---------------------------------------------------------
+        // [Fix 1] Parse VID (Offset 9 & 10, Big-Endian)
+        // ---------------------------------------------------------
+        uint16_t vid = (raw_data1[9] << 8) | raw_data1[10];
+        const char* vendor_name = get_vendor_name(vid);
+
+        // If VID is 0 or FFFF, treat as no device
+        if (vid == 0x0000 || vid == 0xFFFF) {
+            cJSON_AddStringToObject(drive_obj1, "product", "NA");
+            cJSON_AddStringToObject(drive_obj1, "SN", "NA");
+            cJSON_AddStringToObject(drive_obj1, "Version", "NA");
+        }
+        else {
+            cJSON_AddStringToObject(drive_obj1, "product", vendor_name);
+            // ---------------------------------------------------------
+            // [Fix 2] Parse SN (Offset 11, Length 20)
+            // ---------------------------------------------------------
+            memcpy(sn_buf1, &raw_data1[11], 20);
+            sn_buf1[20] = '\0';            // Null terminate
+            trim_trailing_spaces(sn_buf1); // Remove trailing spaces
+            cJSON_AddStringToObject(drive_obj1, "SN", sn_buf1);
+
+            // ---------------------------------------------------------
+            // [Fix 3] Version Handling
+            // ---------------------------------------------------------
+            // In NVMe-MI Basic Command Response (32 bytes), 
+            // Firmware Version is not included (Byte 31 is PEC).
+            // Currently displaying "NA".
+
+            cJSON_AddStringToObject(drive_obj1, "Version", "NA");
+        }
+
+        // Add to JSON
+        snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+        cJSON_AddItemToObject(root1, key_buf1, drive_obj1);
+    }
+
+    // 5. Print and release
+    char* out1 = cJSON_Print(root1);
+    dbg_printf("%s\n", out1);
+    free(out1);
+    cJSON_Delete(root1);
+
+
+
+
+
 
     return 0;
 }
@@ -836,20 +1008,20 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
     uint8_t* slot_ptrs[] = {
      boardInfo.nvme_slot_0,
      boardInfo.nvme_slot_1,
-     boardInfo.nvme_slot_2,
-     boardInfo.nvme_slot_3,
-     boardInfo.nvme_slot_4,
-     boardInfo.nvme_slot_5,
-     boardInfo.nvme_slot_6,
-     boardInfo.nvme_slot_7,
-             boardInfo.nvme_slot_8,
+       boardInfo.nvme_slot_2,
+        boardInfo.nvme_slot_3,
+        boardInfo.nvme_slot_4,
+        boardInfo.nvme_slot_5,
+        boardInfo.nvme_slot_6,
+        boardInfo.nvme_slot_7,
+        boardInfo.nvme_slot_8,
         boardInfo.nvme_slot_9,
         boardInfo.nvme_slot_10,
         boardInfo.nvme_slot_11,
         boardInfo.nvme_slot_12,
         boardInfo.nvme_slot_13,
-        boardInfo.nvme_slot_14,
-        boardInfo.nvme_slot_15,
+
+
     };
 
     // 2. Create JSON object
@@ -1447,7 +1619,7 @@ int handle_reset(int count, int argc, char* argv[]) {
 
 
 int handle_gpio(int count, int argc, char* argv[]) {
-    cmd_printf("[CMD] Count=%d, Action=System Reset\n", count);
+    cmd_printf("[CMD] Count=%d, Action=GPIO\n", count);
     
     // Operation: GPIO Setval <ionumber> <Value>
     if (argc == 4 && STR_EQUAL(argv[0], "GPIO") && STR_EQUAL(argv[1], "Setval")) {

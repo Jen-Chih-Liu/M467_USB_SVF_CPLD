@@ -868,6 +868,80 @@ uint32_t read_board(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,
 }
 
 
+uint32_t read_board_cpld1(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, M463_BoardData_t* board_dat) {
+    // Prepare and send the command
+    char cmd_board[PACKET_SIZE] = { 0 };
+    cmd_board[0] = (char)0xc4; // read board command prefix
+
+    int actual_length = 0;;
+    // Send command
+    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_board, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    if (r < 0) {
+        fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
+        return (uint32_t)-1; // [Modified] Send failed -> return -1
+    }
+
+    // Prepare the receive buffer
+    unsigned char in_data[transfer_size] = { 0 };
+
+     actual_length = 0;;
+    // Read the returned data from the device
+    int r_in = libusb_interrupt_transfer(handle, ep_in, in_data, sizeof(in_data), &actual_length, 1000); // 1 second timeout
+
+    if (r_in != 0) {
+        fprintf(stderr, "Error reading version from device: %s\n", libusb_error_name(r_in));
+        return (uint32_t)-1; // Read failed
+    }
+
+    // Check if the returned data length is sufficient
+    if (actual_length < 1000) {
+        fprintf(stderr, "Version response was too short (%d bytes).\n", actual_length);
+        return (uint32_t)-1; // Insufficient data
+    }
+
+    // Map received data to structure members
+    board_dat->temp_sensor_high = in_data[map_tempersensor_high];
+    board_dat->temp_sensor_low = in_data[map_tempersensor_low];
+    board_dat->cpld_version = in_data[map_cpld_ver];
+    board_dat->cpld_test_ver = in_data[map_cpld_test_ver];
+    board_dat->fan_duty= in_data[map_fan_duty];
+    // RPM is calculated from two bytes
+    board_dat->fan_rpm = (uint16_t)(in_data[map_fan_rpm_high]<<5| (in_data[map_fan_rpm_low]&0x1f));
+    board_dat->hdd_amount = in_data[map_cpld_hdd_amount];
+
+    // Read JTAG ID
+    board_dat->jtag_id= (uint32_t)(in_data[cpld_chip_jtag_id]<<24| in_data[cpld_chip_jtag_id+1] << 16
+        |in_data[cpld_chip_jtag_id+2] << 8 | in_data[cpld_chip_jtag_id + 3]);
+    
+    // Copy register ranges
+    memcpy(board_dat->cpld_reg_40_4f, &in_data[0x40], 16);
+    memcpy(board_dat->cpld_reg_50_5f, &in_data[0x50], 16);
+    memcpy(board_dat->cpld_reg_60_6f, &in_data[0x60], 16);
+
+
+    // Copy NVMe slot information
+    memcpy(board_dat->nvme_slot_0, &in_data[0x100], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_1, &in_data[0x120], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_2, &in_data[0x140], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_3, &in_data[0x160], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_4, &in_data[0x180], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_5, &in_data[0x1A0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_6, &in_data[0x1C0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_7, &in_data[0x1E0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_8, &in_data[0x200], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_9, &in_data[0x220], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_10, &in_data[0x240], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_11, &in_data[0x260], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_12, &in_data[0x280], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_13, &in_data[0x2A0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_14, &in_data[0x2C0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_15, &in_data[0x2E0], NVME_INFO_LEN);
+
+    return 0; // Success
+}
+
+
+
 /**
  * @brief Reads BMC data from a specific USB logical device index.
  * 
@@ -919,6 +993,50 @@ int usb_read_multi_bmc(unsigned char usb_cnt, M463_BoardData_t* pBoardData)
     return (r == 0) ? 0 : 1;
 }
 
+
+int usb_read_multi_bmc_cpld1(unsigned char usb_cnt, M463_BoardData_t* pBoardData)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    // Init and fetch list
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    // Refresh internal device map
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+    if (g_device_count == 0)
+        return 1;
+    r = -1;
+    // Check if logical index is valid
+    if (g_device_count > usb_cnt)
+    {       
+        // Open the specific device and discover endpoints
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            // Perform actual board data read
+            r = (int)read_board_cpld1(handle, ep_out, ep_in, pBoardData);
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
 
 
 /**

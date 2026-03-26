@@ -69,15 +69,18 @@
 #define nvme_slot_15 0x2e0
 
 extern volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) ;
+extern volatile uint8_t bmc_report1[1024] __attribute__((aligned(4))) ;
 extern volatile uint8_t g_u8DumpLogFlag;
 extern void tempersensor_read(void);
 extern void fan_read(void);
-extern void CPLD_read(void);
+extern int CPLD_read(void);
+extern int CPLD_read1(void);
 extern void CPLD_read_AFTER(void);
 extern void fan_inital(void);
 extern int FanIC_BackupRegisters(void);
 extern void Set_USB_SerialNumber_From_UID(void);
 extern void nvm_mi_read(void);
+extern void nvm_mi_read_1(void);
 extern float show_temperature(uint8_t h_bytem, uint8_t l_byte);
 extern void show_cpld_information(uint8_t *p_buf);
 extern void print_nvme_basic_management_info(uint8_t *data);

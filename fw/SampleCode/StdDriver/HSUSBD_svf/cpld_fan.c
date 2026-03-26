@@ -5,7 +5,7 @@
 #include "g_def.h"
 #include <stdbool.h>
 
-void CPLD_read(void)
+int CPLD_read(void)
 {
     unsigned char local_cnt; // Local counter for loops.
 
@@ -17,7 +17,7 @@ void CPLD_read(void)
     }
     else
     {
-        // printf("read cpld false\n\r");
+        return 0; //false
     }
 
     // Read the CPLD test version register.
@@ -53,7 +53,61 @@ void CPLD_read(void)
             bmc_report[cpld_hdd_led + local_cnt] = I2C_ReadByte(I2C0, cpld_adr);
         }
     }
+		 return 1;
 }
+
+
+int  CPLD_read1(void)
+{
+    unsigned char local_cnt; // Local counter for loops.
+
+    // Read the CPLD version register.
+    if (I2C_WriteByte(I2C2, cpld_adr, cpld_ver) == 0)
+    {
+        bmc_report1[cpld_ver] = I2C_ReadByte(I2C2, cpld_adr);
+        // printf("cv=0x%x\n\r", bmc_report[cpld_ver]);
+    }
+    else
+    {
+       return 0;
+    }
+
+    // Read the CPLD test version register.
+    if (I2C_WriteByte(I2C2, cpld_adr, cpld_test_ver) == 0)
+    {
+        bmc_report1[cpld_test_ver] = I2C_ReadByte(I2C2, cpld_adr);
+    }
+
+    // Read the register that indicates the number of installed HDDs.
+    if (I2C_WriteByte(I2C2, cpld_adr, cpld_hdd_amount) == 0)
+    {
+        bmc_report1[cpld_hdd_amount] = I2C_ReadByte(I2C2, cpld_adr);
+    }
+
+    // Loop through all possible HDD slots to read their respective statuses.
+    for (local_cnt = 0; local_cnt < cpld_hdd_max_cnt; local_cnt++)
+    {
+        // Read the CPLD HDD port status for the current slot.
+        if (I2C_WriteByte(I2C2, cpld_adr, cpld_hdd_port_status + local_cnt) == 0)
+        {
+            bmc_report1[cpld_hdd_port_status + local_cnt] = I2C_ReadByte(I2C2, cpld_adr);
+        }
+
+        // Read the CPLD HDD general status for the current slot.
+        if (I2C_WriteByte(I2C2, cpld_adr, cpld_hdd_status + local_cnt) == 0)
+        {
+            bmc_report1[cpld_hdd_status + local_cnt] = I2C_ReadByte(I2C2, cpld_adr);
+        }
+
+        // Read the CPLD HDD LED status for the current slot.
+        if (I2C_WriteByte(I2C2, cpld_adr, cpld_hdd_led + local_cnt) == 0)
+        {
+            bmc_report1[cpld_hdd_led + local_cnt] = I2C_ReadByte(I2C2, cpld_adr);
+        }
+    }
+		return 1;
+}
+
 
 /**
  * @brief Reads CPLD data and prints the version for debugging.
@@ -130,6 +184,22 @@ void tempersensor_read(void)
         bmc_report[map_tempersensor_low] = temp_buf[1];
     }
 }
+
+void tempersensor_read1(void)
+{
+    unsigned char temp_buf[32];
+
+    // Set the register pointer to the temperature data register.
+    if (I2C_WriteByte(I2C2, tempersensor_adr, REG_TEMP_DATA) == 0)
+    {
+        // Read the 2-byte temperature value.
+        I2C_ReadMultiBytes(I2C2, tempersensor_adr, temp_buf, 2);
+        // Store the high and low bytes of the temperature reading.
+        bmc_report1[map_tempersensor_high] = temp_buf[0];
+        bmc_report1[map_tempersensor_low] = temp_buf[1];
+    }
+}
+
 
 
 /* ==============================================================================

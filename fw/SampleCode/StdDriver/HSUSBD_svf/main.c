@@ -389,11 +389,99 @@ void TMR0_IRQHandler(void)
 }
 
 volatile uint32_t g_u32AdcIntFlag = 0;
+volatile uint32_t g_u32clpd_lost = 0;
 void EADC00_IRQHandler(void)
 {
     g_u32AdcIntFlag = 1;
     EADC_CLR_INT_FLAG(EADC0, EADC_STATUS2_ADIF0_Msk);      /* Clear the A/D ADINT0 interrupt flag */
 }
+
+uint32_t I2C_WriteMultiBytes_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data[], uint32_t u32wLen)
+{
+    uint8_t u8Xfering = 1u, u8Err = 0u, u8Ctrl = 0u;
+    uint32_t u32txLen = 0u, u32TimeOutCount = 0u;
+
+    g_I2C_i32ErrCode = 0;
+
+    I2C_START(i2c);                                                     /* Send START */
+    while(u8Xfering && (u8Err == 0u))
+    {
+        u32TimeOutCount = I2C_TIMEOUT/10;
+        I2C_WAIT_READY(i2c)
+        {
+            if(--u32TimeOutCount == 0)
+            {
+                g_I2C_i32ErrCode = I2C_ERR_TIMEOUT;
+                u8Err = 1u;
+                break;
+            }
+        }
+
+        switch(I2C_GET_STATUS(i2c))
+        {
+        case 0x08u:
+            I2C_SET_DATA(i2c, (uint8_t)((u8SlaveAddr << 1u) | 0x00u));  /* Write SLA+W to Register I2CDAT */
+            u8Ctrl = I2C_CTL_SI;                                        /* Clear SI */
+            break;
+
+        case 0x18u:                                                     /* Slave Address ACK */
+        case 0x28u:
+            if(u32txLen < u32wLen)
+            {
+                I2C_SET_DATA(i2c, data[u32txLen++]);                    /* Write Data to I2CDAT */
+            }
+            else
+            {
+                u8Ctrl = I2C_CTL_STO_SI;                                /* Clear SI and send STOP */
+                u8Xfering = 0u;
+            }
+            break;
+
+        case 0x20u:                                                     /* Slave Address NACK */
+        case 0x30u:                                                     /* Master transmit data NACK */
+            u8Ctrl = I2C_CTL_STO_SI;                                    /* Clear SI and send STOP */
+            u8Err = 1u;
+            break;
+
+        case 0x38u:                                                     /* Arbitration Lost */
+        default:                                                        /* Unknown status */
+					  g_u32clpd_lost=1;
+            I2C_SET_CONTROL_REG(i2c, I2C_CTL_STO_SI);                   /* Clear SI and send STOP */
+            u8Ctrl = I2C_CTL_SI;
+            u8Err = 1u;
+            break;
+        }
+        I2C_SET_CONTROL_REG(i2c, u8Ctrl);                               /* Write controlbit to I2C_CTL register */
+    }
+
+    u32TimeOutCount = I2C_TIMEOUT/10;
+    while ((i2c)->CTL0 & I2C_CTL0_STO_Msk)
+    {
+        if(--u32TimeOutCount == 0)
+        {
+            g_I2C_i32ErrCode = I2C_ERR_TIMEOUT;
+            break;
+        }
+    }
+
+    return u32txLen;                                                    /* Return bytes length that have been transmitted */
+}
+
+
+uint8_t I2C_WriteByte_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data)
+{
+    uint32_t u32txLen = I2C_WriteMultiBytes_detect(i2c, u8SlaveAddr, &data, 1);
+
+    if (u32txLen == 1u)
+    {
+        return 0;   /* Write data success */
+    }
+    else
+    {
+        return 1;   /* Write data fail, or bus occurs error events */
+    }
+}
+
 /**
  * @brief  Main function.
  * @param  None
@@ -434,19 +522,29 @@ int main(void)
     PA->SMTEN |= GPIO_SMTEN_SMTEN7_Msk | GPIO_SMTEN_SMTEN6_Msk ;
     PC->SMTEN |= GPIO_SMTEN_SMTEN1_Msk | GPIO_SMTEN_SMTEN0_Msk ;
 
+    GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
+    PC14=0;
     printf("\n\nCPU @ %dHz\n", SystemCoreClock);
     printf("inital scan:%d\n\r", xsvftool_esp_scan());
     printf("jtag id 0x%x\n\r", xsvftool_esp_id());
+    
     // Store the scanned CPLD JTAG ID into the bmc_report buffer.
     bmc_report[cpld_jtag_id] = (xsvftool_esp_id() >> 24) & 0xff;
     bmc_report[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
     bmc_report[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
     bmc_report[cpld_jtag_id + 3] = (xsvftool_esp_id() >> 0) & 0xff;
-
+    bmc_report1[cpld_jtag_id] = (xsvftool_esp_id() >> 24) & 0xff;
+    bmc_report1[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
+    bmc_report1[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
+    bmc_report1[cpld_jtag_id + 3] = (xsvftool_esp_id() >> 0) & 0xff;
+   
     I2C0_Init();
     I2C1_Init();
     I2C2_Init();
-    UI2C0_Init();
+		    UI2C0_Init();
+		  I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+
+ PC14=1;
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
     response_buff[0] = 0;
@@ -474,7 +572,7 @@ int main(void)
     //   s_I2C4HandlerFn = I2C_SlaveTRx;
     // I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     //smbus sel
-    GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
+
 
     //9848 SMBus reset
     GPIO_SetMode(PB, BIT6, GPIO_MODE_OUTPUT);
@@ -508,9 +606,16 @@ int main(void)
                 // FanIC_BackupRegisters();
                 //FanIC_CompareAndRestore();
                 CPLD_read();          // Read CPLD status.
-                //fan_read();           // Read fan speed and duty cycle.
+							//fan_read();           // Read fan speed and duty cycle.
                 tempersensor_read();  // Read temperature sensor.
                 nvm_mi_read();        // Read NVMe drive information.
+							if (g_u32clpd_lost==0)
+							{
+                CPLD_read1();          // Read CPLD status.
+								nvm_mi_read_1();  
+							}
+                
+                
             }
 
 
@@ -789,6 +894,18 @@ int main(void)
 
             }
 
+           if (usb_rcvbuf[0] == 0xc4)
+            {
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = bmc_report1[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+
+            }
+
             // Command 0xd0: I2C write.
             if (usb_rcvbuf[0] == 0xd0)
             {
@@ -952,6 +1069,7 @@ int main(void)
                     if (PC14 == 0)
                     {
                         CPLD_read();
+											CPLD_read1();
                     }
                 }
 
@@ -999,10 +1117,6 @@ int main(void)
             // Re-enable interrupts.
             __set_PRIMASK(0);
         }
-
-
-
-
 
     }
 
