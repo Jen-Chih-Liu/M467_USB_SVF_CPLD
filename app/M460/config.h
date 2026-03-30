@@ -30,7 +30,7 @@
 #define cpld_hdd_status 0x50
 #define cpld_hdd_led 0x60
 #define cpld_hdd_max_cnt 8
-#define cpld_jtag_id  
+//#define cpld_jtag_id  
 #define TEMP_RESOLUTION         0.0625f
 #define nvme_slot_0_offset 0x100
 #define nvme_slot_1_offset 0x120

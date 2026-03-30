@@ -19,12 +19,12 @@
  * @brief Global array to store entries of detected USB devices.
  */
 DeviceEntry MyDeviceMap[MAX_DEVICES];
-
+DeviceEntry MyDeviceMap1[MAX_DEVICES];
 /**
  * @brief Global counter for the number of devices currently in MyDeviceMap.
  */
 int g_device_count = 0;
-
+int g_device_count1 = 0;
 // --- Comparison function for sorting (for qsort) ---
 /**
  * @brief Compares two devices for sorting.
@@ -972,7 +972,10 @@ int usb_read_multi_bmc(unsigned char usb_cnt, M463_BoardData_t* pBoardData)
 
     libusb_free_device_list(devs, 1);
     if (g_device_count == 0)
+    {
+         libusb_exit(ctx);
         return 1;
+    }
     r = -1;
     // Check if logical index is valid
     if (g_device_count > usb_cnt)
@@ -1017,7 +1020,10 @@ int usb_read_multi_bmc_cpld1(unsigned char usb_cnt, M463_BoardData_t* pBoardData
 
     libusb_free_device_list(devs, 1);
     if (g_device_count == 0)
+        {
+             libusb_exit(ctx);
         return 1;
+        }
     r = -1;
     // Check if logical index is valid
     if (g_device_count > usb_cnt)

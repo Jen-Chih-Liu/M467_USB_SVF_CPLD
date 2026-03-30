@@ -59,7 +59,7 @@ static uint8_t ReadNvmeDataFromChannel(I2C_T *i2c_bus, uint8_t *pu8DataBuf, uint
 
 
 
-static uint8_t ReadNvmeDataFromChannel_1(I2C_T *i2c_bus, uint8_t *pu8DataBuf, uint32_t u32ReadCnt)
+static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, uint32_t u32ReadCnt)
 {
     uint8_t i;
     uint8_t u8DataLen;
@@ -71,7 +71,7 @@ static uint8_t ReadNvmeDataFromChannel_1(I2C_T *i2c_bus, uint8_t *pu8DataBuf, ui
         if (UI2C_WriteByte(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG) == 0)
         {
             // Perform the read operation.
-            u8DataLen = I2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], pu8DataBuf, u32ReadCnt);
+            u8DataLen = UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], pu8DataBuf, u32ReadCnt);
 
             // Check if the read was successful.
             if (u8DataLen == u32ReadCnt)
@@ -135,6 +135,8 @@ void nvm_mi_read(void)
 
     if (bmc_report[cpld_hdd_amount] == 0xff)
         return;
+        if (bmc_report[cpld_hdd_amount] > 15)
+        return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
     GPIO_SetMode(PA, BIT9, GPIO_MODE_OUTPUT);
@@ -194,6 +196,9 @@ void nvm_mi_read_1(void)
     const uint8_t u8ChannelsPerMux = 8; // Each TCA9548 has 8 channels
 
     if (bmc_report1[cpld_hdd_amount] == 0xff)
+        return;
+    
+    if (bmc_report1[cpld_hdd_amount] > 15)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.

@@ -84,7 +84,7 @@ void USBD20_IRQHandler(void)
         if (IrqSt & HSUSBD_BUSINTSTS_DMADONEIF_Msk)
         {
             g_hsusbd_DmaDone = 1;
-            printf("Read command - Complete\n");
+            //printf("Read command - Complete\n");
             HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_DMADONEIF_Msk);
 
             if (HSUSBD->DMACTL & HSUSBD_DMACTL_DMARD_Msk)

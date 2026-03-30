@@ -533,6 +533,8 @@ int main(void)
     bmc_report[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
     bmc_report[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
     bmc_report[cpld_jtag_id + 3] = (xsvftool_esp_id() >> 0) & 0xff;
+		
+		 printf("inital scan:%d\n\r", xsvftool_esp_scan());
     bmc_report1[cpld_jtag_id] = (xsvftool_esp_id() >> 24) & 0xff;
     bmc_report1[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
     bmc_report1[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
@@ -541,8 +543,8 @@ int main(void)
     I2C0_Init();
     I2C1_Init();
     I2C2_Init();
-		    UI2C0_Init();
-		  I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+		UI2C0_Init();
+		I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
 
  PC14=1;
     HSUSBD_Start();
@@ -587,7 +589,7 @@ int main(void)
 
     while (g_u32AdcIntFlag == 0);
 
-    unsigned int adc_val = EADC_GET_CONV_DATA(EADC0, 1);
+    unsigned int adc_val = EADC_GET_CONV_DATA(EADC0, 0);
     NVIC_DisableIRQ(EADC00_IRQn);
     EADC_Close(EADC0);
 
@@ -603,6 +605,8 @@ int main(void)
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
+							if (PC14==0)
+							{
                 // FanIC_BackupRegisters();
                 //FanIC_CompareAndRestore();
                 CPLD_read();          // Read CPLD status.
@@ -614,6 +618,7 @@ int main(void)
                 CPLD_read1();          // Read CPLD status.
 								nvm_mi_read_1();  
 							}
+						}
                 
                 
             }

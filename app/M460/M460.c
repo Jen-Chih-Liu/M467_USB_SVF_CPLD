@@ -156,31 +156,8 @@ int handle_cpld(int count, int argc, char* argv[]) {
             return -1;
         }
 
-        int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
-        if (ret1 != 0)
-        {
-            // Prepare JSON
-            cJSON* root = cJSON_CreateObject();
-
-            // Dynamically generate Key: "CPLD ID"
-            char key_buf[64];
-            snprintf(key_buf, sizeof(key_buf), "CPLD_1 ID");
-
-            // Fill in result (Success/fail)
-            cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
-            
-
-            // Print and release
-            char* out = cJSON_Print(root);
-            json_printf("%s\n", out);
-
-            free(out);
-            cJSON_Delete(root);
-            return -1;
-        }
-
+         usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
         
-
         // Prepare a buffer to store the converted string
         char id_str_buf[16];
         char id_str_buf1[16];
@@ -243,27 +220,8 @@ int handle_cpld(int count, int argc, char* argv[]) {
             return -1;
         }
        
-        int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
-        if (ret1 != 0)
-        {
-            // Prepare JSON
-            cJSON* root = cJSON_CreateObject();
-
-            char key_buf[64];
-            snprintf(key_buf, sizeof(key_buf), "CPLD Version");
-
-            // Fill in result (Success/fail)
-            cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
-
-
-            // Print and release
-            char* out = cJSON_Print(root);
-            json_printf("%s\n", out);
-
-            free(out);
-            cJSON_Delete(root);
-            return -1;
-        }
+         usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+       
 
         // Prepare a buffer to store the converted string
         char version_str_buf[16];
