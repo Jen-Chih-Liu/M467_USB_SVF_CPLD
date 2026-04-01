@@ -121,7 +121,7 @@ void SYS_Init(void)
     SET_I2C1_SDA_PB0();
     SET_I2C1_SCL_PB1();
     PB->SMTEN |= GPIO_SMTEN_SMTEN0_Msk | GPIO_SMTEN_SMTEN1_Msk ;
-
+#if 0
     //CPLD 2
     SET_I2C2_SDA_PA10();
     SET_I2C2_SCL_PA11();
@@ -131,7 +131,7 @@ void SYS_Init(void)
     SET_USCI0_DAT0_PB13(); //I2C DATA
     SET_USCI0_CLK_PB12(); //I2C CLK
     PB->SMTEN |= GPIO_SMTEN_SMTEN12_Msk | GPIO_SMTEN_SMTEN13_Msk ;
-
+#endif
 
     //for bmc master
     SET_I2C4_SDA_PF4();
@@ -542,11 +542,86 @@ int main(void)
    
     I2C0_Init();
     I2C1_Init();
-    I2C2_Init();
-		UI2C0_Init();
-		I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+		
+   	GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);	
+	  GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
+	  PA10=1;
+		PA11=1;
+ 	  GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);	
+	  GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
+		  __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+				    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+		 		    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+				    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+		if (PA10!=1||PA11!=1)
+		{
+		g_u32clpd_lost=1;
+		goto cpld1_init;
+		}
 
- PC14=1;
+   	GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);	
+	  GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
+	  PA10=0;
+		PA11=0;
+ 	  GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);	
+	  GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
+		    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+				    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+				    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+				    __NOP();
+		 __NOP();
+		 __NOP();
+		 __NOP();
+		if (PA10==0||PA11==0)
+		{
+		g_u32clpd_lost=1;
+		}
+		
+		
+cpld1_init:
+		if (g_u32clpd_lost==0)
+		{
+			    SYS_UnlockReg();
+		    //CPLD 2
+    SET_I2C2_SDA_PA10();
+    SET_I2C2_SCL_PA11();
+    PA->SMTEN |= GPIO_SMTEN_SMTEN10_Msk | GPIO_SMTEN_SMTEN11_Msk ;
+
+    //NVME0
+    SET_USCI0_DAT0_PB13(); //I2C DATA
+    SET_USCI0_CLK_PB12(); //I2C CLK
+    PB->SMTEN |= GPIO_SMTEN_SMTEN12_Msk | GPIO_SMTEN_SMTEN13_Msk ;
+			
+	   I2C2_Init();
+		UI2C0_Init();
+			 SYS_LockReg();
+		}
+		
+
+		//I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+
+    PC14=1;
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
     response_buff[0] = 0;
@@ -768,7 +843,7 @@ int main(void)
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x03;
-                response_buff[2] = 0x25;
+                response_buff[2] = 0x31;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.

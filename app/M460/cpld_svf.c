@@ -220,7 +220,7 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
             if (i > 0 && svf.commands[i - 1] != NULL) {
                 const char* prev_cmd = svf.commands[i - 1];
                 if (strstr(prev_cmd, "SDR") != NULL && strstr(prev_cmd, "2080") != NULL) {
-                    sleep_time = 0.05;
+                    sleep_time = 0.003; // Override to 3 ms for SDR 2080 commands
                 }
             }
             sleep_seconds_svf(sleep_time);
@@ -561,7 +561,9 @@ int cpld_svf_update(unsigned char usb_cnt, char* svf_file, char* fail_reason_buf
                 snprintf(fail_reason_buf, buf_len, "Programming Fail at Line %d", error_line_index);
             }
             else {
-                snprintf(fail_reason_buf, buf_len, "%s (Line %d)", cpld_error_to_string(status), error_line_index);
+                const char* failed_cmd = (error_line_index > 0 && error_line_index <= svf.count)
+                    ? svf.commands[error_line_index - 1] : "";
+                snprintf(fail_reason_buf, buf_len, "%s (Line %d): %s", cpld_error_to_string(status), error_line_index, failed_cmd);
             }
         }
     }
