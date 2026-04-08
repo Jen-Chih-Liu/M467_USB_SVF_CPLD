@@ -53,7 +53,8 @@ int CPLD_read(void)
             bmc_report[cpld_hdd_led + local_cnt] = I2C_ReadByte(I2C0, cpld_adr);
         }
     }
-		 return 1;
+
+    return 1;
 }
 
 
@@ -69,7 +70,7 @@ int  CPLD_read1(void)
     }
     else
     {
-       return 0;
+        return 0;
     }
 
     // Read the CPLD test version register.
@@ -105,7 +106,8 @@ int  CPLD_read1(void)
             bmc_report1[cpld_hdd_led + local_cnt] = I2C_ReadByte(I2C2, cpld_adr);
         }
     }
-		return 1;
+
+    return 1;
 }
 
 
@@ -717,7 +719,7 @@ int FanIC_CompareAndRestore(void)
 }
 
 
-#define EEPROM_SLAVE_ADDR  0xa0>>1
+#define EEPROM_SLAVE_ADDR  0xae>>1
 
 
 /**
@@ -733,7 +735,7 @@ void EEPROM_WaitReady(void)
     while (1)
     {
         I2C_START(I2C0);
-        u32TimeOutCount = I2C_TIMEOUT;
+        u32TimeOutCount = I2C_TIMEOUT/2;
         I2C_WAIT_READY(I2C0)
         {
             if (--u32TimeOutCount == 0)
@@ -744,7 +746,7 @@ void EEPROM_WaitReady(void)
         }
         I2C_SET_DATA(I2C0, (EEPROM_SLAVE_ADDR << 1) | 0x00);
         I2C_SET_CONTROL_REG(I2C0, I2C_CTL_SI);
-        u32TimeOutCount = I2C_TIMEOUT;
+        u32TimeOutCount = I2C_TIMEOUT/2;
         I2C_WAIT_READY(I2C0)
         {
             if (--u32TimeOutCount == 0)
@@ -758,7 +760,7 @@ void EEPROM_WaitReady(void)
         {
             /* Received ACK (0x18), EEPROM has completed the write cycle and is ready */
             I2C_STOP(I2C0);
-            u32TimeOutCount = I2C_TIMEOUT;
+            u32TimeOutCount = I2C_TIMEOUT/2;
 
             while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
             {
@@ -775,7 +777,7 @@ void EEPROM_WaitReady(void)
 
         /* Received NACK (0x20), send STOP and delay slightly before retrying */
         I2C_STOP(I2C0);
-        u32TimeOutCount = I2C_TIMEOUT;
+        u32TimeOutCount = I2C_TIMEOUT/2;
 
         while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
         {
@@ -788,6 +790,69 @@ void EEPROM_WaitReady(void)
     }
 }
 
+
+void EEPROM_WaitReady_1(void)
+{
+    uint32_t u32TimeOutCount = 0u;
+
+    while (1)
+    {
+        I2C_START(I2C2);
+        u32TimeOutCount = I2C_TIMEOUT/2;
+        I2C_WAIT_READY(I2C2)
+        {
+            if (--u32TimeOutCount == 0)
+            {
+
+                break;
+            }
+        }
+        I2C_SET_DATA(I2C2, (EEPROM_SLAVE_ADDR << 1) | 0x00);
+        I2C_SET_CONTROL_REG(I2C2, I2C_CTL_SI);
+        u32TimeOutCount = I2C_TIMEOUT/2;
+        I2C_WAIT_READY(I2C2)
+        {
+            if (--u32TimeOutCount == 0)
+            {
+
+                break;
+            }
+        }
+
+        if (I2C_GET_STATUS(I2C2) == 0x18)
+        {
+            /* Received ACK (0x18), EEPROM has completed the write cycle and is ready */
+            I2C_STOP(I2C2);
+            u32TimeOutCount = I2C_TIMEOUT/2;
+
+            while ((I2C2)->CTL0 & I2C_CTL0_STO_Msk)
+            {
+                if (--u32TimeOutCount == 0)
+                {
+
+                    break;
+                }
+            }
+
+
+            break;
+        }
+
+        /* Received NACK (0x20), send STOP and delay slightly before retrying */
+        I2C_STOP(I2C2);
+        u32TimeOutCount = I2C_TIMEOUT/2;
+
+        while ((I2C2)->CTL0 & I2C_CTL0_STO_Msk)
+        {
+            if (--u32TimeOutCount == 0)
+            {
+
+                break;
+            }
+        }
+    }
+}
+unsigned char temp_abc;
 /**
  * @brief   Low-level function: Single page continuous write (Cannot cross 16-Byte page boundary)
  * @details Uses BSP's I2C_WriteMultiBytes. Need to pack the address and data together manually.
@@ -808,11 +873,36 @@ void EEPROM_WritePage(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
     }
 
     /* Call official API for multi-byte write (Total length = data length + 1 byte address) */
-    I2C_WriteMultiBytes(I2C0, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
+    temp_abc=I2C_WriteMultiBytes(I2C0, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
 
     /* Wait for the EEPROM to burn the buffer data into non-volatile memory */
     EEPROM_WaitReady();
 }
+
+
+void EEPROM_WritePage_1(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
+{
+    /* Create transmit buffer: 1 Byte memory address + up to 16 Bytes of data */
+    uint8_t u8TxBuf[17];
+    uint32_t i;
+
+    /* Place the internal memory address at index 0 */
+    u8TxBuf[0] = u8DataAddr;
+
+    /* Copy the data to be written right after the address */
+    for (i = 0; i < u32Len; i++)
+    {
+        u8TxBuf[i + 1] = pu8Data[i];
+    }
+
+    /* Call official API for multi-byte write (Total length = data length + 1 byte address) */
+    I2C_WriteMultiBytes(I2C2, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
+
+    /* Wait for the EEPROM to burn the buffer data into non-volatile memory */
+    EEPROM_WaitReady_1();
+}
+
+
 
 /**
  * @brief   High-level function: Automatically handles page boundaries, can write up to 256 Bytes
@@ -843,6 +933,31 @@ void EEPROM_WriteData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
     }
 }
 
+
+void EEPROM_WriteData_1(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
+{
+    uint32_t u32WriteLen;
+    uint32_t u32PageSpace;
+
+    while (u32Len > 0)
+    {
+        /* Calculate remaining space in the current page (16 Bytes per page) */
+        u32PageSpace = 16 - (u8DataAddr % 16);
+
+        /* Determine how many bytes to write this time (min of remaining len & page space) */
+        u32WriteLen = (u32Len < u32PageSpace) ? u32Len : u32PageSpace;
+
+        /* Call the page write function */
+        EEPROM_WritePage_1(u8DataAddr, pu8Data, u32WriteLen);
+
+        /* Update address and pointers for the next iteration */
+        u8DataAddr += u32WriteLen;
+        pu8Data    += u32WriteLen;
+        u32Len     -= u32WriteLen;
+    }
+}
+
+
 /**
  * @brief   Sequentially read multiple bytes of data from CAT34TS02 EEPROM
  * @details Directly calls the BSP provided I2C_ReadMultiBytesOneReg to complete the task
@@ -851,4 +966,10 @@ void EEPROM_ReadData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
 {
     /* The official API handles the dummy write address and Repeated Start -> Read flows automatically */
     I2C_ReadMultiBytesOneReg(I2C0, EEPROM_SLAVE_ADDR, u8DataAddr, pu8Data, u32Len);
+}
+
+void EEPROM_ReadData_1(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
+{
+    /* The official API handles the dummy write address and Repeated Start -> Read flows automatically */
+    I2C_ReadMultiBytesOneReg(I2C2, EEPROM_SLAVE_ADDR, u8DataAddr, pu8Data, u32Len);
 }

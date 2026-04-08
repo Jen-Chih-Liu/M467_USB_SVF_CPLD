@@ -21,6 +21,7 @@ extern volatile uint8_t usb_rcvbuf[1024] __attribute__((aligned(4)));
 extern volatile uint16_t buffer_index;
 extern volatile uint8_t response_buff[1024] __attribute__((aligned(4)));
 volatile uint32_t total_line = 0;
+volatile uint32_t false_line = 0;
 int xsvftool_esp_scan(void);
 uint32_t xsvftool_esp_id(void);
 int xsvftool_esp_svf_packet(int (*packet_getbyte)(), int index, int final, char *report);
@@ -35,6 +36,8 @@ volatile uint32_t timer0_count = 0 ;
 
 volatile unsigned char i2c_monitor_flag = 1;
 volatile unsigned char reset_var = 0xa5;
+
+volatile unsigned char mux_TCA9548_flag = 0;
 int getbyte_usb_fun()
 {
     if (svf_string_rcvbuf[pos] == '\0') return -1;
@@ -404,12 +407,13 @@ uint32_t I2C_WriteMultiBytes_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t dat
     g_I2C_i32ErrCode = 0;
 
     I2C_START(i2c);                                                     /* Send START */
-    while(u8Xfering && (u8Err == 0u))
+
+    while (u8Xfering && (u8Err == 0u))
     {
-        u32TimeOutCount = I2C_TIMEOUT/10;
+        u32TimeOutCount = I2C_TIMEOUT / 10;
         I2C_WAIT_READY(i2c)
         {
-            if(--u32TimeOutCount == 0)
+            if (--u32TimeOutCount == 0)
             {
                 g_I2C_i32ErrCode = I2C_ERR_TIMEOUT;
                 u8Err = 1u;
@@ -417,47 +421,50 @@ uint32_t I2C_WriteMultiBytes_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t dat
             }
         }
 
-        switch(I2C_GET_STATUS(i2c))
+        switch (I2C_GET_STATUS(i2c))
         {
-        case 0x08u:
-            I2C_SET_DATA(i2c, (uint8_t)((u8SlaveAddr << 1u) | 0x00u));  /* Write SLA+W to Register I2CDAT */
-            u8Ctrl = I2C_CTL_SI;                                        /* Clear SI */
-            break;
+            case 0x08u:
+                I2C_SET_DATA(i2c, (uint8_t)((u8SlaveAddr << 1u) | 0x00u));  /* Write SLA+W to Register I2CDAT */
+                u8Ctrl = I2C_CTL_SI;                                        /* Clear SI */
+                break;
 
-        case 0x18u:                                                     /* Slave Address ACK */
-        case 0x28u:
-            if(u32txLen < u32wLen)
-            {
-                I2C_SET_DATA(i2c, data[u32txLen++]);                    /* Write Data to I2CDAT */
-            }
-            else
-            {
-                u8Ctrl = I2C_CTL_STO_SI;                                /* Clear SI and send STOP */
-                u8Xfering = 0u;
-            }
-            break;
+            case 0x18u:                                                     /* Slave Address ACK */
+            case 0x28u:
+                if (u32txLen < u32wLen)
+                {
+                    I2C_SET_DATA(i2c, data[u32txLen++]);                    /* Write Data to I2CDAT */
+                }
+                else
+                {
+                    u8Ctrl = I2C_CTL_STO_SI;                                /* Clear SI and send STOP */
+                    u8Xfering = 0u;
+                }
 
-        case 0x20u:                                                     /* Slave Address NACK */
-        case 0x30u:                                                     /* Master transmit data NACK */
-            u8Ctrl = I2C_CTL_STO_SI;                                    /* Clear SI and send STOP */
-            u8Err = 1u;
-            break;
+                break;
 
-        case 0x38u:                                                     /* Arbitration Lost */
-        default:                                                        /* Unknown status */
-					  g_u32clpd_lost=1;
-            I2C_SET_CONTROL_REG(i2c, I2C_CTL_STO_SI);                   /* Clear SI and send STOP */
-            u8Ctrl = I2C_CTL_SI;
-            u8Err = 1u;
-            break;
+            case 0x20u:                                                     /* Slave Address NACK */
+            case 0x30u:                                                     /* Master transmit data NACK */
+                u8Ctrl = I2C_CTL_STO_SI;                                    /* Clear SI and send STOP */
+                u8Err = 1u;
+                break;
+
+            case 0x38u:                                                     /* Arbitration Lost */
+            default:                                                        /* Unknown status */
+                g_u32clpd_lost = 1;
+                I2C_SET_CONTROL_REG(i2c, I2C_CTL_STO_SI);                   /* Clear SI and send STOP */
+                u8Ctrl = I2C_CTL_SI;
+                u8Err = 1u;
+                break;
         }
+
         I2C_SET_CONTROL_REG(i2c, u8Ctrl);                               /* Write controlbit to I2C_CTL register */
     }
 
-    u32TimeOutCount = I2C_TIMEOUT/10;
+    u32TimeOutCount = I2C_TIMEOUT / 10;
+
     while ((i2c)->CTL0 & I2C_CTL0_STO_Msk)
     {
-        if(--u32TimeOutCount == 0)
+        if (--u32TimeOutCount == 0)
         {
             g_I2C_i32ErrCode = I2C_ERR_TIMEOUT;
             break;
@@ -481,7 +488,10 @@ uint8_t I2C_WriteByte_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data)
         return 1;   /* Write data fail, or bus occurs error events */
     }
 }
-
+extern  const uint8_t s_au8_TCA9548_Addr[];
+extern const uint8_t s_au8_PCA9848_Addr[];
+volatile uint8_t temp_w_buf[4]={0};
+extern  uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel);
 /**
  * @brief  Main function.
  * @param  None
@@ -523,105 +533,132 @@ int main(void)
     PC->SMTEN |= GPIO_SMTEN_SMTEN1_Msk | GPIO_SMTEN_SMTEN0_Msk ;
 
     GPIO_SetMode(PC, BIT14, GPIO_MODE_OUTPUT);
-    PC14=0;
+    PC14 = 0;
     printf("\n\nCPU @ %dHz\n", SystemCoreClock);
     printf("inital scan:%d\n\r", xsvftool_esp_scan());
     printf("jtag id 0x%x\n\r", xsvftool_esp_id());
-    
+
     // Store the scanned CPLD JTAG ID into the bmc_report buffer.
     bmc_report[cpld_jtag_id] = (xsvftool_esp_id() >> 24) & 0xff;
     bmc_report[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
     bmc_report[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
     bmc_report[cpld_jtag_id + 3] = (xsvftool_esp_id() >> 0) & 0xff;
-		
-		 printf("inital scan:%d\n\r", xsvftool_esp_scan());
+
+    printf("inital scan:%d\n\r", xsvftool_esp_scan());
     bmc_report1[cpld_jtag_id] = (xsvftool_esp_id() >> 24) & 0xff;
     bmc_report1[cpld_jtag_id + 1] = (xsvftool_esp_id() >> 16) & 0xff;
     bmc_report1[cpld_jtag_id + 2] = (xsvftool_esp_id() >> 8) & 0xff;
     bmc_report1[cpld_jtag_id + 3] = (xsvftool_esp_id() >> 0) & 0xff;
-   
+
     I2C0_Init();
     I2C1_Init();
-		
-   	GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);	
-	  GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
-	  PA10=1;
-		PA11=1;
- 	  GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);	
-	  GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
-		  __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-				    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-		 		    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-				    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-		if (PA10!=1||PA11!=1)
-		{
-		g_u32clpd_lost=1;
-		goto cpld1_init;
-		}
 
-   	GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);	
-	  GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
-	  PA10=0;
-		PA11=0;
- 	  GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);	
-	  GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
-		    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-				    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-				    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-				    __NOP();
-		 __NOP();
-		 __NOP();
-		 __NOP();
-		if (PA10==0||PA11==0)
-		{
-		g_u32clpd_lost=1;
-		}
-		
-		
+    GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);
+    GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
+    PA10 = 1;
+    PA11 = 1;
+    GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);
+    GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+
+    if (PA10 != 1 || PA11 != 1)
+    {
+        g_u32clpd_lost = 1;
+        goto cpld1_init;
+    }
+
+    GPIO_SetMode(PA, BIT10, GPIO_MODE_OUTPUT);
+    GPIO_SetMode(PA, BIT11, GPIO_MODE_OUTPUT);
+    PA10 = 0;
+    PA11 = 0;
+    GPIO_SetMode(PA, BIT10, GPIO_MODE_INPUT);
+    GPIO_SetMode(PA, BIT11, GPIO_MODE_INPUT);
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+
+    if (PA10 == 0 || PA11 == 0)
+    {
+        g_u32clpd_lost = 1;
+    }
+
+
 cpld1_init:
-		if (g_u32clpd_lost==0)
-		{
-			    SYS_UnlockReg();
-		    //CPLD 2
-    SET_I2C2_SDA_PA10();
-    SET_I2C2_SCL_PA11();
-    PA->SMTEN |= GPIO_SMTEN_SMTEN10_Msk | GPIO_SMTEN_SMTEN11_Msk ;
 
-    //NVME0
-    SET_USCI0_DAT0_PB13(); //I2C DATA
-    SET_USCI0_CLK_PB12(); //I2C CLK
-    PB->SMTEN |= GPIO_SMTEN_SMTEN12_Msk | GPIO_SMTEN_SMTEN13_Msk ;
-			
-	   I2C2_Init();
-		UI2C0_Init();
-			 SYS_LockReg();
-		}
-		
+    if (g_u32clpd_lost == 0)
+    {
+        SYS_UnlockReg();
+        //CPLD 2
+        SET_I2C2_SDA_PA10();
+        SET_I2C2_SCL_PA11();
+        PA->SMTEN |= GPIO_SMTEN_SMTEN10_Msk | GPIO_SMTEN_SMTEN11_Msk ;
 
-		//I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+        //NVME0
+        SET_USCI0_DAT0_PB13(); //I2C DATA
+        SET_USCI0_CLK_PB12(); //I2C CLK
+        PB->SMTEN |= GPIO_SMTEN_SMTEN12_Msk | GPIO_SMTEN_SMTEN13_Msk ;
 
-    PC14=1;
+        I2C2_Init();
+        UI2C0_Init();
+        SYS_LockReg();
+    }
+
+  if (SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 1)==1)
+	{
+	mux_TCA9548_flag=0;
+	}
+
+  if (SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[0], 1)==1)
+	{
+	mux_TCA9548_flag=1;
+	}
+
+    //I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
+//test
+	 temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+               temp_w_buf[2]=I2C_WriteMultiBytes(I2C0, cpld_adr,&temp_w_buf[0], 2);
+	 if (I2C_WriteByte(I2C0, cpld_adr, 0xf0) == 0)
+    {
+        temp_w_buf[2] = I2C_ReadByte(I2C0, cpld_adr);
+    }
+	
+	EEPROM_WriteData(0x00, &temp_w_buf[0], 2);
+                //temp_w_buf[0]=0xf3;
+                //temp_w_buf[1]=0x00;
+                // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+	
+	
+	//test
+    PC14 = 1;
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
     response_buff[0] = 0;
@@ -680,22 +717,23 @@ cpld1_init:
             // If monitoring is enabled, read data from all sensors.
             if (i2c_monitor_flag == 1)
             {
-							if (PC14==0)
-							{
-                // FanIC_BackupRegisters();
-                //FanIC_CompareAndRestore();
-                CPLD_read();          // Read CPLD status.
-							//fan_read();           // Read fan speed and duty cycle.
-                tempersensor_read();  // Read temperature sensor.
-                nvm_mi_read();        // Read NVMe drive information.
-							if (g_u32clpd_lost==0)
-							{
-                CPLD_read1();          // Read CPLD status.
-								nvm_mi_read_1();  
-							}
-						}
-                
-                
+                if (PC14 == 0)
+                {
+                    // FanIC_BackupRegisters();
+                    //FanIC_CompareAndRestore();
+                    CPLD_read();          // Read CPLD status.
+                    //fan_read();           // Read fan speed and duty cycle.
+                    tempersensor_read();  // Read temperature sensor.
+                    nvm_mi_read();        // Read NVMe drive information.
+
+                    if (g_u32clpd_lost == 0)
+                    {
+                        CPLD_read1();          // Read CPLD status.
+                        nvm_mi_read_1();
+                    }
+                }
+
+
             }
 
 
@@ -711,7 +749,7 @@ cpld1_init:
         {
 #if 1
             printf("temperature sensor read %f celsius\n\r",
-                   show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
+            show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
             show_cpld_information(&bmc_report[0]);
             uint8_t nvme_i;
 
@@ -789,10 +827,15 @@ cpld1_init:
                 pos = 0;
                 // Call the SVF player function to execute the command packet.
                 retval = xsvftool_esp_svf_packet(getbyte_usb_fun, total_line /*??*/, final /*0 or 1*/, report);
-
+                if((retval!=0)&&(cpld_false_flag!=0))
+								{
+									cpld_false_flag = 1;
+									false_line=total_line;
+								}
                 // If the SVF player returns an error and it's the first error, record the line number.
-                if ((retval != 0) && (cpld_false_flag == 0))
+               if ((retval != 0) && (cpld_false_flag == 0))
                 {
+									false_line=total_line;
                     response_buff[0] = (total_line) & 0xff;
                     response_buff[1] = (total_line >> 8) & 0xff;
                     response_buff[2] = (total_line >> 16) & 0xff;
@@ -818,6 +861,7 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xa0)
             {
                 total_line = 0;
+							false_line=0;
                 cpld_false_flag = 0;
                 buffer_index = 0; /* reset accumulation buffer in case a previous transfer was interrupted */
                 memset((void *)svf_string_rcvbuf, 0x0, SVF_BUF_LENGTH);
@@ -842,8 +886,8 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x03;
-                response_buff[2] = 0x31;
+                response_buff[1] = 0x04;
+                response_buff[2] = 0x07;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
@@ -953,16 +997,30 @@ cpld1_init:
             // Command 0xc1: programming eeprom
             if (usb_rcvbuf[0] == 0xc1)
             {
-
+                //switch to bmc
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+                I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
                 EEPROM_WriteData(0x00, &usb_rcvbuf[1], 256);
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x00;
+                 I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
             }
 
             //command 0xc2 read: eeprom
             if (usb_rcvbuf[0] == 0xc2)
             {
+                 //switch to bmc
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+                I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+              
                 response_buff[0] = 0xc2;
                 EEPROM_ReadData(0x00, &response_buff[1], 256);
 
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x00;
+                 I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
                 for (i = 0; i < 1024; i++)
                 {
                     HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
@@ -974,7 +1032,54 @@ cpld1_init:
 
             }
 
-           if (usb_rcvbuf[0] == 0xc4)
+
+            // Command 0xc5: programming eeprom1, I2C 2
+            if (usb_rcvbuf[0] == 0xc5)
+            {
+if (g_u32clpd_lost == 0)
+{
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
+              
+                EEPROM_WriteData_1(0x00, &usb_rcvbuf[1], 256);
+
+
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x00;
+                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
+              
+}
+            }
+
+            //command 0xc6 read: eeprom1, I2C 2
+            if (usb_rcvbuf[0] == 0xc6)
+            {
+                if (g_u32clpd_lost == 0)
+                {
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
+              
+                response_buff[0] = 0xc6;
+                EEPROM_ReadData_1(0x00, &response_buff[1], 256);
+
+                temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x00;
+                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
+              
+                }
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+            }
+
+
+            if (usb_rcvbuf[0] == 0xc4)
             {
                 for (i = 0; i < 1024; i++)
                 {
@@ -1149,7 +1254,10 @@ cpld1_init:
                     if (PC14 == 0)
                     {
                         CPLD_read();
-											CPLD_read1();
+											  if(g_u32clpd_lost ==0)
+												{
+                        CPLD_read1();
+												}
                     }
                 }
 

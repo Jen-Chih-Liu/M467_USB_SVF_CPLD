@@ -3,7 +3,7 @@
 #include "hid_transfer.h"
 #include <string.h>
 #include "g_def.h"
-
+extern volatile unsigned char mux_TCA9548_flag ;
 // Array of possible NVMe-MI I2C addresses to probe.
 // This makes it easy to add or remove addresses for different hardware models.
 static const uint8_t s_au8NvmeMiAddr[] =
@@ -13,9 +13,15 @@ static const uint8_t s_au8NvmeMiAddr[] =
     NVME_TP3_ADDR,
 };
 
+//#define TCA9548 (0xE0>>1)
+ const uint8_t s_au8_TCA9548_Addr[] =
+{
+	    (0xe0>>1),
+      (0xe2 >> 1), // MUX 1 Address
+};
 // Array of TCA9548 I2C multiplexer addresses.
 // This allows for easy expansion to multiple MUXes.
-static const uint8_t s_au8_PCA9848_Addr[] =
+ const uint8_t s_au8_PCA9848_Addr[] =
 {
     (0xB2 >> 1), // MUX 1 Address
     (0xB4 >> 1), // MUX 2 Address
@@ -93,7 +99,7 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
  * @param[in] u8Channel  The channel number to select (0-7).
  * @return    1 on success, 0 on failure.
  */
-static uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
+ uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 {
     if (I2C_WriteByte(i2c_bus, u8MuxAddr, (0x01 << u8Channel)) != 0)
     {
@@ -105,7 +111,7 @@ static uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Cha
     return 1; // Success
 }
 
- 
+
 static uint8_t SelectMuxChannel_1(UI2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 {
     if (UI2C_WriteByte(i2c_bus, u8MuxAddr, (0x01 << u8Channel)) != 0)
@@ -135,7 +141,8 @@ void nvm_mi_read(void)
 
     if (bmc_report[cpld_hdd_amount] == 0xff)
         return;
-        if (bmc_report[cpld_hdd_amount] > 15)
+
+    if (bmc_report[cpld_hdd_amount] > 15)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
@@ -159,7 +166,8 @@ void nvm_mi_read(void)
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
         }
-
+if (mux_TCA9548_flag==0)
+{
         // Select the I2C channel for the current NVMe slot.
         if (!SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
         {
@@ -167,6 +175,18 @@ void nvm_mi_read(void)
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
         }
+}
+else
+{
+        if (!SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
+        {
+            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+            continue;
+        }
+
+}
+
 
         // Attempt to read the NVMe-MI data from the selected channel.
         if (ReadNvmeDataFromChannel(I2C1, au8TempBuf, NVME_READ_COUNT))
@@ -197,7 +217,7 @@ void nvm_mi_read_1(void)
 
     if (bmc_report1[cpld_hdd_amount] == 0xff)
         return;
-    
+
     if (bmc_report1[cpld_hdd_amount] > 15)
         return;
 
@@ -222,14 +242,26 @@ void nvm_mi_read_1(void)
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
         }
-
+ if (mux_TCA9548_flag==0)
+{
+        // Select the I2C channel for the current NVMe slot.
+        if (!SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
+        {
+            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+            continue;
+        }
+}
+else
+{
         // Select the I2C channel for the current NVMe slot.
         if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
         {
             // Mark data as invalid and skip to the next slot if MUX channel selection fails.
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
-        }
+        }	
+			}
 
         // Attempt to read the NVMe-MI data from the selected channel.
         if (ReadNvmeDataFromChannel_1(UI2C0, au8TempBuf, NVME_READ_COUNT))

@@ -13,7 +13,7 @@
 #include "libusb\include\libusb.h"
 #include "config.h"
 #define last_check 1
-#define dump_svf_log 1
+#define dump_svf_log 0
 
 typedef struct {
     char** commands;
@@ -247,7 +247,7 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
             uint32_t error_code = check_device_status(handle, ep_in);
             if (error_code != 0) {
                 fprintf(stderr, "Error! Device reported error at SVF cmd %d (DevCode: %u)\n", i + 1, error_code);
-                if (out_failed_line) *out_failed_line = i + 1;
+                if (out_failed_line) *out_failed_line = error_code + 1;
                 return CPLD_ERR_PROGRAMMING;
             }
         }
@@ -260,7 +260,7 @@ int program_device_with_svf(SvfCommands svf, libusb_device_handle* handle, uint8
     if (final_error_code != 0) {
         fprintf(stderr, "Error! Device reported final error (DevCode: %u)\n", final_error_code);
         // This usually means the last command failed or verification failed
-        if (out_failed_line) *out_failed_line = svf.count;
+        if (out_failed_line) *out_failed_line = final_error_code + 1; // Report the last command index as the failure point
         return CPLD_ERR_PROGRAMMING;
     }
 #endif
@@ -557,14 +557,19 @@ int cpld_svf_update(unsigned char usb_cnt, char* svf_file, char* fail_reason_buf
 
         // --- Format error message ---
         if (fail_reason_buf) {
-            if (status == CPLD_ERR_PROGRAMMING) {
-                snprintf(fail_reason_buf, buf_len, "Programming Fail at Line %d", error_line_index);
-            }
-            else {
-                const char* failed_cmd = (error_line_index > 0 && error_line_index <= svf.count)
-                    ? svf.commands[error_line_index - 1] : "";
-                snprintf(fail_reason_buf, buf_len, "%s (Line %d): %s", cpld_error_to_string(status), error_line_index, failed_cmd);
-            }
+            const char* failed_cmd = (error_line_index > 0 && error_line_index <= svf.count)
+                ? svf.commands[error_line_index - 1] : "";
+//LCMXO2-4000HC
+            //if (failed_cmd[0] != '\0' && strstr(failed_cmd, "TDO  (012BC043)") != NULL) {
+              //  snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC");
+            //}
+            // LFMXO5-25
+            //else if (failed_cmd[0] != '\0' && strstr(failed_cmd, "TDO  (010F7043)") != NULL) {
+              //  snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC");
+            //}
+            //else {
+                snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC, %s (Line %d): %s", cpld_error_to_string(status), error_line_index, failed_cmd);
+            //}
         }
     }
     else {

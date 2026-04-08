@@ -1922,6 +1922,143 @@ unsigned int loc_file_size;
     return (r == 0) ? 0 : 1;
 }
 
+
+int usbd_multi_mcu_eeprom_write_FRU1(unsigned char usb_cnt, char* filename )
+{
+    unsigned char  W_EEPROM_BUFFER[256];
+unsigned int loc_file_size;
+    FILE* fp;
+    
+    // Initialize file size counter
+    loc_file_size = 0;
+    
+    // Pre-fill EEPROM buffer with 0xFF (default erased state)
+    for (unsigned int i = 0; i < 256; i++)
+    {
+        W_EEPROM_BUFFER[i] = 0xff;
+    }
+    
+    // Attempt to open the binary file for reading
+    if ((fp = fopen(filename, "rb")) == NULL)
+    {
+        dbg_printf("APROM FILE OPEN FALSE\n\r");
+        return RES_FILE_NO_FOUND;
+    }
+    
+    // Read file content into buffer
+    if (fp != NULL)
+    {
+        // Fix for reading file size correctly
+        fseek(fp, 0, SEEK_END);
+        loc_file_size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        
+        // Validate file size doesn't exceed EEPROM capacity
+        if (loc_file_size > 256) {
+            fclose(fp);
+            return RES_FILE_SIZE_OVER;
+        }
+        
+        // Read file data into buffer
+        fread(W_EEPROM_BUFFER, 1, loc_file_size, fp);
+        fclose(fp);
+    }
+
+    // === USB Communication Setup ===
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    // Initialize libusb library
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    // Retrieve global device list
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    // Scan and update internal device map
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+   // Check if any devices were found
+   if (g_device_count == 0) {
+        return 1;
+    }
+    
+    r = -1;
+    
+    // Verify the requested device index is valid
+    if (g_device_count > usb_cnt)
+    {
+        // Open the specific device and retrieve endpoints
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            int actual_length = 0;
+            char cmd_eeprom_write[PACKET_SIZE] = { 0 };
+            
+            // Prepare command packet: Copy EEPROM data starting at byte[1]
+            for (int i = 0; i < 256; i++)
+            {
+                cmd_eeprom_write[1 + i] = W_EEPROM_BUFFER[i];
+            }
+            
+            // Set command byte for EEPROM write operation
+            cmd_eeprom_write[0] = (char)0xc5; // EEPROM write command prefix
+
+            // Execute USB interrupt transfer to send EEPROM write command
+            r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_write, PACKET_SIZE, &actual_length, 0); 
+
+            // Send 0xC2 to read back EEPROM content and compare with write buffer
+            if (r == 0)
+            {
+                char cmd_eeprom_read[PACKET_SIZE] = { 0 };
+                unsigned char eeprom_readback[transfer_size] = { 0 };
+
+                cmd_eeprom_read[0] = (char)0xc6;
+                actual_length = 0;
+                r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_read, PACKET_SIZE, &actual_length, 0);
+
+                if (r == 0)
+                {
+                    actual_length = 0;
+                    r = libusb_interrupt_transfer(handle, ep_in, eeprom_readback, sizeof(eeprom_readback), &actual_length, 1000);
+
+                    if (r == 0)
+                    {
+                        if (actual_length < 257 || eeprom_readback[0] != (unsigned char)0xc2)
+                        {
+                            printf("EEPROM readback response invalid, len=%d, cmd=0x%02x\n", actual_length, eeprom_readback[0]);
+                            r = -1;
+                        }
+                        else if (memcmp(W_EEPROM_BUFFER, &eeprom_readback[1], 256) != 0)
+                        {
+                            printf("EEPROM verify failed after write\n");
+                            r = -1;
+                        }
+                    }
+                }
+            }
+
+            
+            // Release interface and close device handle
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+    
+    // Clean up resources
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
 /**
  * @brief Sends an 0xDC command to control a specific GPIO on the MCU.
  */
