@@ -1773,7 +1773,7 @@ int usbd_multi_mcu_start_bmc_monitor(unsigned char usb_cnt)
 }
 
 
-
+extern void sleep_seconds_svf(double seconds); 
 /**
  * @brief Writes data to MCU's EEPROM from a binary file.
  * 
@@ -1804,7 +1804,7 @@ unsigned int loc_file_size;
     // Attempt to open the binary file for reading
     if ((fp = fopen(filename, "rb")) == NULL)
     {
-        dbg_printf("APROM FILE OPEN FALSE\n\r");
+        dbg_printf("EEPROM FILE OPEN FALSE\n\r");
         return RES_FILE_NO_FOUND;
     }
     
@@ -1876,7 +1876,7 @@ unsigned int loc_file_size;
 
             // Execute USB interrupt transfer to send EEPROM write command
             r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_write, PACKET_SIZE, &actual_length, 0); 
-
+sleep_seconds_svf(0.3); // Short delay to ensure EEPROM write completion    
             // Send 0xC2 to read back EEPROM content and compare with write buffer
             if (r == 0)
             {
@@ -1886,7 +1886,7 @@ unsigned int loc_file_size;
                 cmd_eeprom_read[0] = (char)0xc2;
                 actual_length = 0;
                 r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_read, PACKET_SIZE, &actual_length, 0);
-
+                sleep_seconds_svf(0.3); // Short delay to ensure EEPROM write completion    
                 if (r == 0)
                 {
                     actual_length = 0;
@@ -1941,7 +1941,7 @@ unsigned int loc_file_size;
     // Attempt to open the binary file for reading
     if ((fp = fopen(filename, "rb")) == NULL)
     {
-        dbg_printf("APROM FILE OPEN FALSE\n\r");
+        dbg_printf("EEPROM FILE OPEN FALSE\n\r");
         return RES_FILE_NO_FOUND;
     }
     
@@ -2013,7 +2013,7 @@ unsigned int loc_file_size;
 
             // Execute USB interrupt transfer to send EEPROM write command
             r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_write, PACKET_SIZE, &actual_length, 0); 
-
+sleep_seconds_svf(0.3); // Short delay to ensure EEPROM write completion    
             // Send 0xC2 to read back EEPROM content and compare with write buffer
             if (r == 0)
             {
@@ -2023,7 +2023,7 @@ unsigned int loc_file_size;
                 cmd_eeprom_read[0] = (char)0xc6;
                 actual_length = 0;
                 r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_eeprom_read, PACKET_SIZE, &actual_length, 0);
-
+                sleep_seconds_svf(0.3); // Short delay to ensure EEPROM write completion   
                 if (r == 0)
                 {
                     actual_length = 0;
@@ -2031,7 +2031,7 @@ unsigned int loc_file_size;
 
                     if (r == 0)
                     {
-                        if (actual_length < 257 || eeprom_readback[0] != (unsigned char)0xc2)
+                        if (actual_length < 257 || eeprom_readback[0] != (unsigned char)0xc6)
                         {
                             printf("EEPROM readback response invalid, len=%d, cmd=0x%02x\n", actual_length, eeprom_readback[0]);
                             r = -1;

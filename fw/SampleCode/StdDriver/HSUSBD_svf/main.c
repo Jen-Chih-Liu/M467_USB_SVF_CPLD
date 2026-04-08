@@ -491,6 +491,7 @@ uint8_t I2C_WriteByte_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data)
 extern  const uint8_t s_au8_TCA9548_Addr[];
 extern const uint8_t s_au8_PCA9848_Addr[];
 volatile uint8_t temp_w_buf[4]={0};
+volatile uint8_t temp_r_buf[4]={0};
 extern  uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel);
 /**
  * @brief  Main function.
@@ -642,7 +643,8 @@ cpld1_init:
 	}
 
     //I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
-//test
+//eeprom test
+	#if 0
 	 temp_w_buf[0]=0xf3;
                 temp_w_buf[1]=0x01;
                temp_w_buf[2]=I2C_WriteMultiBytes(I2C0, cpld_adr,&temp_w_buf[0], 2);
@@ -655,8 +657,24 @@ cpld1_init:
                 //temp_w_buf[0]=0xf3;
                 //temp_w_buf[1]=0x00;
                 // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+	EEPROM_ReadData(0x00, &temp_r_buf[0], 2);
 	
+	//2
+	temp_w_buf[0]=0xf3;
+                temp_w_buf[1]=0x01;
+               temp_w_buf[2]=I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
+	 if (I2C_WriteByte(I2C2, cpld_adr, 0xf0) == 0)
+    {
+        temp_w_buf[2] = I2C_ReadByte(I2C2, cpld_adr);
+    }
 	
+	EEPROM_WriteData_1(0x00, &temp_w_buf[0], 2);
+                //temp_w_buf[0]=0xf3;
+                //temp_w_buf[1]=0x00;
+                // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+	EEPROM_ReadData_1(0x00, &temp_r_buf[0], 2);
+	
+	#endif
 	//test
     PC14 = 1;
     HSUSBD_Start();
@@ -887,7 +905,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x04;
-                response_buff[2] = 0x07;
+                response_buff[2] = 0x08;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
@@ -1055,6 +1073,7 @@ if (g_u32clpd_lost == 0)
             //command 0xc6 read: eeprom1, I2C 2
             if (usb_rcvbuf[0] == 0xc6)
             {
+							 response_buff[0] = 0x00;
                 if (g_u32clpd_lost == 0)
                 {
                 temp_w_buf[0]=0xf3;

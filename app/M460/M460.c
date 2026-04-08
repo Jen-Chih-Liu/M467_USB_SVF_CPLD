@@ -590,31 +590,34 @@ int do_hdd_info(int count, int argc, char* argv[]) {
     cJSON_Delete(root);
 
 
-
+if (boardInfo1.cpld_version == 0x0)
+        {
+            return 0;
+        }
 
     // 2. Create JSON root object
     cJSON* root1 = cJSON_CreateObject();
-    int total_slots1 = boardInfo.hdd_amount;
+    int total_slots1 = boardInfo1.hdd_amount;
     cJSON_AddNumberToObject(root1, "NVMECount", total_slots1);
 
     // 3. Prepare pointer array
     uint8_t* slot_ptrs1[] = {
-        boardInfo.nvme_slot_0,
-        boardInfo.nvme_slot_1,
-        boardInfo.nvme_slot_2,
-        boardInfo.nvme_slot_3,
-        boardInfo.nvme_slot_4,
-        boardInfo.nvme_slot_5,
-        boardInfo.nvme_slot_6,
-        boardInfo.nvme_slot_7,
-        boardInfo.nvme_slot_8,
-        boardInfo.nvme_slot_9,
-        boardInfo.nvme_slot_10,
-        boardInfo.nvme_slot_11,
-        boardInfo.nvme_slot_12,
-        boardInfo.nvme_slot_13,
-        boardInfo.nvme_slot_14,
-        boardInfo.nvme_slot_15,
+        boardInfo1.nvme_slot_0,
+        boardInfo1.nvme_slot_1,
+        boardInfo1.nvme_slot_2,
+        boardInfo1.nvme_slot_3,
+        boardInfo1.nvme_slot_4,
+        boardInfo1.nvme_slot_5,
+        boardInfo1.nvme_slot_6,
+        boardInfo1.nvme_slot_7,
+        boardInfo1.nvme_slot_8,
+        boardInfo1.nvme_slot_9,
+        boardInfo1.nvme_slot_10,
+        boardInfo1.nvme_slot_11,
+        boardInfo1.nvme_slot_12,
+        boardInfo1.nvme_slot_13,
+        boardInfo1.nvme_slot_14,
+        boardInfo1.nvme_slot_15,
     };
 
     char key_buf1[16];
@@ -667,10 +670,6 @@ int do_hdd_info(int count, int argc, char* argv[]) {
     dbg_printf("%s\n", out1);
     free(out1);
     cJSON_Delete(root1);
-
-
-
-
 
 
     return 0;
@@ -2312,13 +2311,14 @@ int is_fru_bin_file(const char* filename)
  * @return int 0 on success, -1 on error
  */
 int handle_eeprom(int count, int argc, char* argv[]) {
-    cmd_printf("[CMD] Count=%d, Action=EEPROM Operation: %s\n", count, argv[1]);
+    cmd_printf("[CMD] Count=%d, Action=FRU Operation: %s\n", count, argv[1]);
 
     // Validate arguments
     if (argc < 3) {
-        dbg_printf("[Error] Usage: EEPROM <WRITE/READ> <File>\n");
+        dbg_printf("[Error] Usage: FRU <WRITE> <File>\n");
         return -1;
     }
+
 
     char* target = argv[1];
     char* filepath = argv[2];
@@ -2326,7 +2326,8 @@ int handle_eeprom(int count, int argc, char* argv[]) {
     char fail_reason[128] = { 0 }; // Initialize buffer
     int result = 0;
     
-    if (STR_EQUAL(target, "WRITE"))
+
+    if (STR_EQUAL(target, "WRITE0"))
     {
         // Check file extension
         if (is_fru_bin_file(filepath) != 0) {
@@ -2359,6 +2360,44 @@ int handle_eeprom(int count, int argc, char* argv[]) {
         free(out);
         cJSON_Delete(root);
     }
+
+
+
+    if (STR_EQUAL(target, "WRITE1"))
+    {
+        // Check file extension
+        if (is_fru_bin_file(filepath) != 0) {
+            EEPROM_result = RES_FILE_NO_FOUND;
+            snprintf(fail_reason, sizeof(fail_reason), "Invalid File Extension");
+            goto create_json1; // Jump to JSON generation
+        }
+
+        // --- Core modification: receive return value ---
+        EEPROM_result = usbd_multi_mcu_eeprom_write_FRU1((unsigned char)count, filepath);
+
+    create_json1:
+        // 4. Create JSON response
+        cJSON* root = cJSON_CreateObject();
+
+        // Check if isp_result is RES_PASS
+        if (EEPROM_result == 0) {
+            // Success format: {"Update Task": "Success"}
+            cJSON_AddStringToObject(root, "Write Task", "Success");
+        }
+        else {
+            
+            cJSON_AddStringToObject(root, "Update Task", "Fail");
+        }
+
+        // 5. Print and release
+        char* out = cJSON_PrintUnformatted(root); 
+        dbg_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+    }
+
+
      return 0;
 }
 // =============================================================================
@@ -2394,7 +2433,7 @@ cmd_entry_t cmd_table[] = {
 
     {"appver",   handle_appversion,    "app verison information"},
     {"dumpall",   handle_dumpall,    "dump all information"},
-    {"EEPROM",   handle_eeprom,    "EEPROM Read/Write"},
+    {"FRU",   handle_eeprom,    "FRU0/FRU1 Write"},
     {NULL, NULL, NULL} // End marker
 };
 

@@ -852,7 +852,7 @@ void EEPROM_WaitReady_1(void)
         }
     }
 }
-unsigned char temp_abc;
+
 /**
  * @brief   Low-level function: Single page continuous write (Cannot cross 16-Byte page boundary)
  * @details Uses BSP's I2C_WriteMultiBytes. Need to pack the address and data together manually.
@@ -873,7 +873,7 @@ void EEPROM_WritePage(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len)
     }
 
     /* Call official API for multi-byte write (Total length = data length + 1 byte address) */
-    temp_abc=I2C_WriteMultiBytes(I2C0, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
+    I2C_WriteMultiBytes(I2C0, EEPROM_SLAVE_ADDR, u8TxBuf, u32Len + 1);
 
     /* Wait for the EEPROM to burn the buffer data into non-volatile memory */
     EEPROM_WaitReady();
