@@ -279,7 +279,8 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         u8data = (unsigned char) I2C_GET_DATA(I2C4);
 
-        g_au8SlvData[g_u8SlvDataLen++] = u8data;
+        if (g_u8SlvDataLen < sizeof(g_au8SlvData)) /* Guard against g_au8SlvData[32] overflow */
+            g_au8SlvData[g_u8SlvDataLen++] = u8data;
 
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
@@ -329,15 +330,18 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         if (g_u8SlvDataLen == 3)
         {
-            if (fan_address_index == (0x44 >> 1))
+            if (g_au8SlvData[0] < 0xFE) /* Guard: index+1 must be within [0xFF] bounds (0x00~0xFE) */
             {
-                fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
-                fan_address_0x44[g_au8SlvData[0] + 1] = g_au8SlvData[2];
-            }
-            else if (fan_address_index == (0x46 >> 1))
-            {
-                fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
-                fan_address_0x46[g_au8SlvData[0] + 1] = g_au8SlvData[2];
+                if (fan_address_index == (0x44 >> 1))
+                {
+                    fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
+                    fan_address_0x44[g_au8SlvData[0] + 1] = g_au8SlvData[2];
+                }
+                else if (fan_address_index == (0x46 >> 1))
+                {
+                    fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
+                    fan_address_0x46[g_au8SlvData[0] + 1] = g_au8SlvData[2];
+                }
             }
         }
         else if (g_u8SlvDataLen == 1)

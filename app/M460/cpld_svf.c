@@ -346,6 +346,9 @@ SvfCommands read_svf_preserve_format(const char* filepath) {
         if (new_command == NULL) {
             free(current_command);
             fclose(f);
+            // Free already stored commands to prevent memory leak
+            for (int fi = 0; fi < svf.count; fi++) free(svf.commands[fi]);
+            free(svf.commands);
             svf.commands = NULL; // Indicate an error
             return svf;
         }
@@ -360,6 +363,10 @@ SvfCommands read_svf_preserve_format(const char* filepath) {
             if (new_commands == NULL) {
                 free(current_command);
                 fclose(f);
+                // Revert the increment; only (count-1) entries are valid
+                svf.count--;
+                for (int fi = 0; fi < svf.count; fi++) free(svf.commands[fi]);
+                free(svf.commands);
                 svf.commands = NULL; // Indicate an error
                 return svf;
             }

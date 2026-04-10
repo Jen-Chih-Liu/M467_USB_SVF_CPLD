@@ -19,12 +19,12 @@
  * @brief Global array to store entries of detected USB devices.
  */
 DeviceEntry MyDeviceMap[MAX_DEVICES];
-DeviceEntry MyDeviceMap1[MAX_DEVICES];
+//DeviceEntry MyDeviceMap1[MAX_DEVICES];
 /**
  * @brief Global counter for the number of devices currently in MyDeviceMap.
  */
 int g_device_count = 0;
-int g_device_count1 = 0;
+//int g_device_count1 = 0;
 // --- Comparison function for sorting (for qsort) ---
 /**
  * @brief Compares two devices for sorting.

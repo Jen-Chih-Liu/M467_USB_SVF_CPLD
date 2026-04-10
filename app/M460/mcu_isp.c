@@ -134,7 +134,13 @@ int find_hid_device_and_endpoints_isp(libusb_device_handle** handle, uint8_t* ep
 
     // Retrieve configuration descriptor to find endpoints
     struct libusb_config_descriptor* config;
-    libusb_get_active_config_descriptor(libusb_get_device(*handle), &config);
+    int cfg_r = libusb_get_active_config_descriptor(libusb_get_device(*handle), &config);
+    if (cfg_r < 0) {
+        fprintf(stderr, "Failed to get config descriptor: %s\n", libusb_error_name(cfg_r));
+        libusb_release_interface(*handle, INTERFACE_NUMBER);
+        libusb_close(*handle);
+        return -1;
+    }
     const struct libusb_interface* inter = &config->interface[INTERFACE_NUMBER];
     const struct libusb_interface_descriptor* inter_desc = &inter->altsetting[0];
 
@@ -195,6 +201,7 @@ ISP_STATE OPEN_USBPORT(void)
         libusb_exit(NULL);
         return RES_CONNECT_FALSE;
     }
+    USB_OPEN_FLAG = 1; // Mark connection as open so CLOSE_USB_PORT releases resources
     return RES_CONNECT;
 
 }
@@ -775,7 +782,13 @@ int find_hid_device_and_endpoints_ldrom(libusb_device_handle** handle, uint8_t* 
 
     // Retrieve configuration descriptor to find endpoints
     struct libusb_config_descriptor* config;
-    libusb_get_active_config_descriptor(libusb_get_device(*handle), &config);
+    int cfg_r = libusb_get_active_config_descriptor(libusb_get_device(*handle), &config);
+    if (cfg_r < 0) {
+        fprintf(stderr, "Failed to get config descriptor: %s\n", libusb_error_name(cfg_r));
+        libusb_release_interface(*handle, INTERFACE_NUMBER);
+        libusb_close(*handle);
+        return -1;
+    }
     const struct libusb_interface* inter = &config->interface[INTERFACE_NUMBER];
     const struct libusb_interface_descriptor* inter_desc = &inter->altsetting[0];
 
@@ -845,7 +858,7 @@ int is_bin_file(const char* filename)
          }
          if (fp != NULL)
          {
-             // 修正讀取檔案大小的方式
+             // 嚙論伐蕭讀嚙踝蕭嚙褕案大嚙緘嚙踝蕭嚙質式
              fseek(fp, 0, SEEK_END);
              file_size = ftell(fp);
              fseek(fp, 0, SEEK_SET);

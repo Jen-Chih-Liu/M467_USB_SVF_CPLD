@@ -331,6 +331,7 @@ void EPB_Handler(void)  /* Interrupt OUT handler */
     uint32_t len, i;
     uint16_t terminator_pos = 0;
     len = HSUSBD->EP[EPB].EPDATCNT & 0xffff;
+    if (len > MAX_STRING_LENGTH) len = MAX_STRING_LENGTH; /* Guard against usb_rcvbuf overflow */
 
     for (i = 0; i < len; i++)
         usb_rcvbuf[i] = HSUSBD->EP[EPB].EPDAT_BYTE;
