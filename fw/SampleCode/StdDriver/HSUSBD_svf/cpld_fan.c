@@ -735,7 +735,7 @@ void EEPROM_WaitReady(void)
     while (1)
     {
         I2C_START(I2C0);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
         I2C_WAIT_READY(I2C0)
         {
             if (--u32TimeOutCount == 0)
@@ -746,7 +746,7 @@ void EEPROM_WaitReady(void)
         }
         I2C_SET_DATA(I2C0, (EEPROM_SLAVE_ADDR << 1) | 0x00);
         I2C_SET_CONTROL_REG(I2C0, I2C_CTL_SI);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
         I2C_WAIT_READY(I2C0)
         {
             if (--u32TimeOutCount == 0)
@@ -760,7 +760,7 @@ void EEPROM_WaitReady(void)
         {
             /* Received ACK (0x18), EEPROM has completed the write cycle and is ready */
             I2C_STOP(I2C0);
-            u32TimeOutCount = I2C_TIMEOUT/2;
+            u32TimeOutCount = I2C_TIMEOUT / 2;
 
             while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
             {
@@ -777,7 +777,7 @@ void EEPROM_WaitReady(void)
 
         /* Received NACK (0x20), send STOP and delay slightly before retrying */
         I2C_STOP(I2C0);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
 
         while ((I2C0)->CTL0 & I2C_CTL0_STO_Msk)
         {
@@ -798,7 +798,7 @@ void EEPROM_WaitReady_1(void)
     while (1)
     {
         I2C_START(I2C2);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
         I2C_WAIT_READY(I2C2)
         {
             if (--u32TimeOutCount == 0)
@@ -809,7 +809,7 @@ void EEPROM_WaitReady_1(void)
         }
         I2C_SET_DATA(I2C2, (EEPROM_SLAVE_ADDR << 1) | 0x00);
         I2C_SET_CONTROL_REG(I2C2, I2C_CTL_SI);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
         I2C_WAIT_READY(I2C2)
         {
             if (--u32TimeOutCount == 0)
@@ -823,7 +823,7 @@ void EEPROM_WaitReady_1(void)
         {
             /* Received ACK (0x18), EEPROM has completed the write cycle and is ready */
             I2C_STOP(I2C2);
-            u32TimeOutCount = I2C_TIMEOUT/2;
+            u32TimeOutCount = I2C_TIMEOUT / 2;
 
             while ((I2C2)->CTL0 & I2C_CTL0_STO_Msk)
             {
@@ -840,7 +840,7 @@ void EEPROM_WaitReady_1(void)
 
         /* Received NACK (0x20), send STOP and delay slightly before retrying */
         I2C_STOP(I2C2);
-        u32TimeOutCount = I2C_TIMEOUT/2;
+        u32TimeOutCount = I2C_TIMEOUT / 2;
 
         while ((I2C2)->CTL0 & I2C_CTL0_STO_Msk)
         {

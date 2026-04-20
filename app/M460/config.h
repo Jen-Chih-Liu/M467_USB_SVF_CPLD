@@ -8,7 +8,7 @@
 
 
 #define MAX_DEVICES 16  // Default maximum support for 16 identical devices
-#define app_version_number "2025121901"
+#define app_version_number "20260420"
 
 #ifdef _WIN32
 #define transfer_size 1025 // Windows USB receiver size 

@@ -494,8 +494,8 @@ uint8_t I2C_WriteByte_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data)
 }
 extern  const uint8_t s_au8_TCA9548_Addr[];
 extern const uint8_t s_au8_PCA9848_Addr[];
-volatile uint8_t temp_w_buf[4]={0};
-volatile uint8_t temp_r_buf[4]={0};
+volatile uint8_t temp_w_buf[4] = {0};
+volatile uint8_t temp_r_buf[4] = {0};
 extern  uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel);
 /**
  * @brief  Main function.
@@ -636,50 +636,74 @@ cpld1_init:
         SYS_LockReg();
     }
 
-  if (SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 1)==1)
-	{
-	mux_TCA9548_flag=0;
-	}
+    if (SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 1) == 1)
+    {
+        mux_TCA9548_flag = 0;
+    }
 
-  if (SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[0], 1)==1)
-	{
-	mux_TCA9548_flag=1;
-	}
+    if (SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[0], 1) == 1)
+    {
+        mux_TCA9548_flag = 1;
+    }
 
     //I2C_WriteByte_detect(I2C2, cpld_adr, cpld_ver);
-//eeprom test
-	#if 0
-	 temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-               temp_w_buf[2]=I2C_WriteMultiBytes(I2C0, cpld_adr,&temp_w_buf[0], 2);
-	 if (I2C_WriteByte(I2C0, cpld_adr, 0xf0) == 0)
+    //eeprom test
+#if 0
+    temp_w_buf[0] = 0xf3;
+    temp_w_buf[1] = 0x01;
+    temp_w_buf[2] = I2C_WriteMultiBytes(I2C0, cpld_adr, &temp_w_buf[0], 2);
+
+    if (I2C_WriteByte(I2C0, cpld_adr, 0xf0) == 0)
     {
         temp_w_buf[2] = I2C_ReadByte(I2C0, cpld_adr);
     }
-	
-	EEPROM_WriteData(0x00, &temp_w_buf[0], 2);
-                //temp_w_buf[0]=0xf3;
-                //temp_w_buf[1]=0x00;
-                // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
-	EEPROM_ReadData(0x00, &temp_r_buf[0], 2);
-	
-	//2
-	temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-               temp_w_buf[2]=I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
-	 if (I2C_WriteByte(I2C2, cpld_adr, 0xf0) == 0)
+
+    EEPROM_WriteData(0x00, &temp_w_buf[0], 2);
+    //temp_w_buf[0]=0xf3;
+    //temp_w_buf[1]=0x00;
+    // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+    EEPROM_ReadData(0x00, &temp_r_buf[0], 2);
+
+    //2
+    temp_w_buf[0] = 0xf3;
+    temp_w_buf[1] = 0x01;
+    temp_w_buf[2] = I2C_WriteMultiBytes(I2C2, cpld_adr, &temp_w_buf[0], 2);
+
+    if (I2C_WriteByte(I2C2, cpld_adr, 0xf0) == 0)
     {
         temp_w_buf[2] = I2C_ReadByte(I2C2, cpld_adr);
     }
-	
-	EEPROM_WriteData_1(0x00, &temp_w_buf[0], 2);
-                //temp_w_buf[0]=0xf3;
-                //temp_w_buf[1]=0x00;
-                // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
-	EEPROM_ReadData_1(0x00, &temp_r_buf[0], 2);
-	
-	#endif
-	//test
+
+    EEPROM_WriteData_1(0x00, &temp_w_buf[0], 2);
+    //temp_w_buf[0]=0xf3;
+    //temp_w_buf[1]=0x00;
+    // I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+    EEPROM_ReadData_1(0x00, &temp_r_buf[0], 2);
+
+
+
+
+    nvm_mi_read();
+#endif
+    //test
+    //CPLD_read();
+    //nvm_mi_read();
+#if 0
+    printf("temperature sensor read %f celsius\n\r",
+           show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
+    show_cpld_information(&bmc_report[0]);
+    uint8_t nvme_i;
+
+    // Loop through all detected NVMe drives and print their information.
+    for (nvme_i = 0; nvme_i < bmc_report[cpld_hdd_amount]; nvme_i++)
+    {
+        // The hardware supports up to 16 drives. Stop if index goes beyond.
+        if (nvme_i >= 16) break;
+
+        print_nvme_basic_management_info(&bmc_report[NVME_MEM_OFFSET + (nvme_i * NVME_READ_COUNT)]);
+    }
+
+#endif
     PC14 = 1;
     HSUSBD_Start();
     // Initialize the USB response buffer to zero.
@@ -771,7 +795,7 @@ cpld1_init:
         {
 #if 1
             printf("temperature sensor read %f celsius\n\r",
-            show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
+                   show_temperature(bmc_report[map_tempersensor_high], bmc_report[map_tempersensor_low]));
             show_cpld_information(&bmc_report[0]);
             uint8_t nvme_i;
 
@@ -849,15 +873,17 @@ cpld1_init:
                 pos = 0;
                 // Call the SVF player function to execute the command packet.
                 retval = xsvftool_esp_svf_packet(getbyte_usb_fun, total_line /*??*/, final /*0 or 1*/, report);
-                if((retval!=0)&&(cpld_false_flag!=0))
-								{
-									cpld_false_flag = 1;
-									false_line=total_line;
-								}
-                // If the SVF player returns an error and it's the first error, record the line number.
-               if ((retval != 0) && (cpld_false_flag == 0))
+
+                if ((retval != 0) && (cpld_false_flag != 0))
                 {
-									false_line=total_line;
+                    cpld_false_flag = 1;
+                    false_line = total_line;
+                }
+
+                // If the SVF player returns an error and it's the first error, record the line number.
+                if ((retval != 0) && (cpld_false_flag == 0))
+                {
+                    false_line = total_line;
                     response_buff[0] = (total_line) & 0xff;
                     response_buff[1] = (total_line >> 8) & 0xff;
                     response_buff[2] = (total_line >> 16) & 0xff;
@@ -883,7 +909,7 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xa0)
             {
                 total_line = 0;
-							false_line=0;
+                false_line = 0;
                 cpld_false_flag = 0;
                 buffer_index = 0; /* reset accumulation buffer in case a previous transfer was interrupted */
                 memset((void *)svf_string_rcvbuf, 0x0, SVF_BUF_LENGTH);
@@ -909,7 +935,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x04;
-                response_buff[2] = 0x08;
+                response_buff[2] = 0x20;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
@@ -1020,29 +1046,30 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xc1)
             {
                 //switch to bmc
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-                I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+                temp_w_buf[0] = 0xf3;
+                temp_w_buf[1] = 0x01;
+                I2C_WriteMultiBytes(I2C0, cpld_adr, temp_w_buf, 2);
                 EEPROM_WriteData(0x00, &usb_rcvbuf[1], 256);
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x00;
-                 I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+                temp_w_buf[0] = 0xf3;
+                temp_w_buf[1] = 0x00;
+                I2C_WriteMultiBytes(I2C0, cpld_adr, temp_w_buf, 2);
             }
 
             //command 0xc2 read: eeprom
             if (usb_rcvbuf[0] == 0xc2)
             {
-                 //switch to bmc
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-                I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
-              
+                //switch to bmc
+                temp_w_buf[0] = 0xf3;
+                temp_w_buf[1] = 0x01;
+                I2C_WriteMultiBytes(I2C0, cpld_adr, temp_w_buf, 2);
+
                 response_buff[0] = 0xc2;
                 EEPROM_ReadData(0x00, &response_buff[1], 256);
 
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x00;
-                 I2C_WriteMultiBytes(I2C0, cpld_adr,temp_w_buf, 2);
+                temp_w_buf[0] = 0xf3;
+                temp_w_buf[1] = 0x00;
+                I2C_WriteMultiBytes(I2C0, cpld_adr, temp_w_buf, 2);
+
                 for (i = 0; i < 1024; i++)
                 {
                     HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
@@ -1058,40 +1085,42 @@ cpld1_init:
             // Command 0xc5: programming eeprom1, I2C 2
             if (usb_rcvbuf[0] == 0xc5)
             {
-if (g_u32clpd_lost == 0)
-{
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
-              
-                EEPROM_WriteData_1(0x00, &usb_rcvbuf[1], 256);
+                if (g_u32clpd_lost == 0)
+                {
+                    temp_w_buf[0] = 0xf3;
+                    temp_w_buf[1] = 0x01;
+                    I2C_WriteMultiBytes(I2C2, cpld_adr, &temp_w_buf[0], 2);
+
+                    EEPROM_WriteData_1(0x00, &usb_rcvbuf[1], 256);
 
 
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x00;
-                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
-              
-}
+                    temp_w_buf[0] = 0xf3;
+                    temp_w_buf[1] = 0x00;
+                    I2C_WriteMultiBytes(I2C2, cpld_adr, &temp_w_buf[0], 2);
+
+                }
             }
 
             //command 0xc6 read: eeprom1, I2C 2
             if (usb_rcvbuf[0] == 0xc6)
             {
-							 response_buff[0] = 0x00;
+                response_buff[0] = 0x00;
+
                 if (g_u32clpd_lost == 0)
                 {
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x01;
-                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
-              
-                response_buff[0] = 0xc6;
-                EEPROM_ReadData_1(0x00, &response_buff[1], 256);
+                    temp_w_buf[0] = 0xf3;
+                    temp_w_buf[1] = 0x01;
+                    I2C_WriteMultiBytes(I2C2, cpld_adr, &temp_w_buf[0], 2);
 
-                temp_w_buf[0]=0xf3;
-                temp_w_buf[1]=0x00;
-                I2C_WriteMultiBytes(I2C2, cpld_adr,&temp_w_buf[0], 2);
-              
+                    response_buff[0] = 0xc6;
+                    EEPROM_ReadData_1(0x00, &response_buff[1], 256);
+
+                    temp_w_buf[0] = 0xf3;
+                    temp_w_buf[1] = 0x00;
+                    I2C_WriteMultiBytes(I2C2, cpld_adr, &temp_w_buf[0], 2);
+
                 }
+
                 for (i = 0; i < 1024; i++)
                 {
                     HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
@@ -1277,10 +1306,11 @@ if (g_u32clpd_lost == 0)
                     if (PC14 == 0)
                     {
                         CPLD_read();
-											  if(g_u32clpd_lost ==0)
-												{
-                        CPLD_read1();
-												}
+
+                        if (g_u32clpd_lost == 0)
+                        {
+                            CPLD_read1();
+                        }
                     }
                 }
 

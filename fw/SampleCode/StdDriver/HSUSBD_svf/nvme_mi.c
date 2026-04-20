@@ -14,14 +14,14 @@ static const uint8_t s_au8NvmeMiAddr[] =
 };
 
 //#define TCA9548 (0xE0>>1)
- const uint8_t s_au8_TCA9548_Addr[] =
+const uint8_t s_au8_TCA9548_Addr[] =
 {
-	    (0xe0>>1),
-      (0xe2 >> 1), // MUX 1 Address
+    (0xe0 >> 1),
+    //(0xe2 >> 1), // MUX 1 Address
 };
 // Array of TCA9548 I2C multiplexer addresses.
 // This allows for easy expansion to multiple MUXes.
- const uint8_t s_au8_PCA9848_Addr[] =
+const uint8_t s_au8_PCA9848_Addr[] =
 {
     (0xB2 >> 1), // MUX 1 Address
     (0xB4 >> 1), // MUX 2 Address
@@ -99,12 +99,14 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
  * @param[in] u8Channel  The channel number to select (0-7).
  * @return    1 on success, 0 on failure.
  */
- uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
+uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 {
+    // printf("u8MuxAddr=0x%x\n\r",u8MuxAddr);
+    //printf("u8Channel=0x%x\n\r",u8Channel);
     if (I2C_WriteByte(i2c_bus, u8MuxAddr, (0x01 << u8Channel)) != 0)
     {
         // Optional: Add error logging here if needed.
-        // printf("Failed to select MUX channel %d\n", u8Channel);
+        // printf("Failed to select MU//X channel %d\n", u8Channel);
         return 0; // Failure
     }
 
@@ -154,7 +156,8 @@ void nvm_mi_read(void)
     {
         uint8_t u8MuxIndex = u8SlotIndex / u8ChannelsPerMux;
         uint8_t u8ChannelOnMux = u8SlotIndex % u8ChannelsPerMux;
-
+        //  printf("u8MuxIndex=0x%x\n\r",u8MuxIndex);
+        //  printf("u8ChannelOnMux=0x%x\n\r",u8ChannelOnMux);
         // Determine the destination buffer for the current slot.
         pu8Dest = &bmc_report[NVME_MEM_OFFSET + (u8SlotIndex * NVME_READ_COUNT)];
 
@@ -166,36 +169,47 @@ void nvm_mi_read(void)
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
         }
-if (mux_TCA9548_flag==0)
-{
-        // Select the I2C channel for the current NVMe slot.
-        if (!SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
-        {
-            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-            continue;
-        }
-}
-else
-{
-        if (!SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
-        {
-            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-            continue;
-        }
 
-}
+        if (mux_TCA9548_flag == 0)
+        {
+            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 0);
+            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[1], 0);
+
+            // Select the I2C channel for the current NVMe slot.
+            if (!SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
+            {
+
+                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
+        }
+        else
+        {
+            SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[0], 0);
+
+            //SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[1], 0);
+            if (!SelectMuxChannel(I2C1, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
+            {
+                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
+
+        }
 
 
         // Attempt to read the NVMe-MI data from the selected channel.
         if (ReadNvmeDataFromChannel(I2C1, au8TempBuf, NVME_READ_COUNT))
         {
+
+            //printf("set\n\r");
             // If successful, copy the data to the correct location in the main report buffer.
             memcpy(pu8Dest, au8TempBuf, NVME_READ_COUNT);
         }
         else
         {
+            //printf("no set\n\r");
             // Optional: If the read failed, clear the buffer area for this slot.
             memset(pu8Dest, 0xFF, NVME_READ_COUNT); // Fill with 0xFF to indicate no data.
         }
@@ -242,26 +256,31 @@ void nvm_mi_read_1(void)
             memset(pu8Dest, 0xFF, NVME_READ_COUNT);
             continue;
         }
- if (mux_TCA9548_flag==0)
-{
-        // Select the I2C channel for the current NVMe slot.
-        if (!SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
+
+        if (mux_TCA9548_flag == 0)
         {
-            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-            continue;
+            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[0], 0);
+            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[1], 0);
+
+            // Select the I2C channel for the current NVMe slot.
+            if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
+            {
+                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
         }
-}
-else
-{
-        // Select the I2C channel for the current NVMe slot.
-        if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
+        else
         {
-            // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-            memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-            continue;
-        }	
-			}
+					 SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[0], 0);
+            // Select the I2C channel for the current NVMe slot.
+            if (!SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
+            {
+                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
+        }
 
         // Attempt to read the NVMe-MI data from the selected channel.
         if (ReadNvmeDataFromChannel_1(UI2C0, au8TempBuf, NVME_READ_COUNT))

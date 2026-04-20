@@ -261,8 +261,8 @@ int handle_cpld(int count, int argc, char* argv[]) {
         // Parse length (number of bytes to read)
         int length = atoi(argv[3]);
 
-        if (length <= 0) {
-            dbg_printf("[Error] Length must be > 0\n");
+        if (length <= 0 || length > 32) {
+            dbg_printf("[Error] Length must be between 1 and 32\n");
             return -1;
         }
 
@@ -590,7 +590,7 @@ int do_hdd_info(int count, int argc, char* argv[]) {
     cJSON_Delete(root);
 
 
-if (boardInfo1.cpld_version == 0x0)
+if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
         {
             return 0;
         }
@@ -776,6 +776,86 @@ int do_hdd_port(int count, int argc, char* argv[]) {
     free(out);
     cJSON_Delete(root);
 
+
+
+M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1)); // Initialize to zero
+     ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
+        {
+            return 0;
+        }
+if (ret != 0)
+    {
+        // Prepare JSON
+        cJSON* root = cJSON_CreateObject();
+
+        char key_buf[64];
+        snprintf(key_buf, sizeof(key_buf), "HDD PORT STATUS");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+
+
+        // Print and release
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+
+    if (argc < 2 || !STR_EQUAL(argv[1], "Status")) {
+        dbg_printf("[Error] Usage: HDD Port Status\n");
+        return -1;
+    }
+    cmd_printf("[CMD] Count=%d, Action=HDD PORT Status\n", count);
+    
+    cJSON* root1 = cJSON_CreateObject();
+    // Use the read hard drive count
+    int hdd_amount1 = boardInfo1.hdd_amount;
+    cJSON_AddNumberToObject(root1, "NVMECount1", hdd_amount1);
+
+    char key_buf1[16];
+
+    // 4. Parse register status (Core logic)
+    for (int i = 0; i < hdd_amount1; i++) {
+        // [Step A] Calculate corresponding Byte Index
+        // 0-3 at index 0 (0x40), 4-7 at index 1 (0x41)...
+        int reg_index = i / 4;
+
+        // [Step B] Calculate corresponding Bit Shift
+        // i%4=0 -> shift 0, i%4=1 -> shift 2...
+        int bit_shift = (i % 4) * 2;
+
+        // [Step C] Get the Byte (corresponding to cpld_reg_40_4f in struct)
+        // Ensure i/4 doesn't exceed array bounds (0-15)
+        uint8_t raw_byte = boardInfo.cpld_reg_40_4f[reg_index];
+
+        // [Step D] Extract 2 bits status
+        // Shift right, then mask with 0x03 (binary 11) to get last two bits
+        uint8_t status_bits = (raw_byte >> bit_shift) & 0x03;
+
+        // [Step E] Determine status (based on definition)
+        // 01(1): SATA Present, 11(3): NVMe Present -> Plugin detected
+        // 00(0): Not Present,  10(2): NVMe Not Present -> No plugin
+        const char* status_str = "false";
+
+        if (status_bits == 0x01 || status_bits == 0x03) {
+            status_str = "true";
+        }
+
+        // [Step F] Add to JSON
+        snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+        cJSON_AddStringToObject(root1, key_buf1, status_str);
+    }
+
+    char* out1 = cJSON_Print(root1);
+    json_printf("%s\n", out1);
+    free(out1);
+    cJSON_Delete(root1);
     return 0;
 }
 
@@ -904,6 +984,103 @@ int do_hdd_led(int count, int argc, char* argv[]) {
     free(out);
     cJSON_Delete(root);
 
+
+ // Read board data structure
+    M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1));
+
+    ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
+        {
+            return 0;
+        }
+
+
+    if (ret != 0)
+    {
+        // Prepare JSON
+        cJSON* root1 = cJSON_CreateObject();
+
+        char key_buf1[64];
+        snprintf(key_buf1, sizeof(key_buf1), "HDD LED STATUS");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root1, key_buf1, "fail, no supports port");
+
+        // Print and release
+        char* out1 = cJSON_Print(root1);
+        json_printf("%s\n", out1);
+
+        free(out1);
+        cJSON_Delete(root1);
+        return -1;
+    }
+
+    cmd_printf("[CMD] Count=%d, Action=HDD LED Status (Real Data)\n", count);
+
+    // 3. Create JSON
+    cJSON* root1 = cJSON_CreateObject();
+
+    // Use read hard drive count (Offset 0x4)
+    int hdd_amount1 = boardInfo1.hdd_amount;
+    cJSON_AddNumberToObject(root1, "NVMECount", hdd_amount1);
+    char key_buf1[16];
+#if 0
+    // Status string mapping array
+    // 00: Standby, 01: Fault, 10: Locate, 11: Rebuild
+    const char* status_map1[] = {
+        "Standby", // 00 (Value 0)
+        "Fault",   // 01 (Value 1)
+        "Locate",  // 10 (Value 2)
+        "Rebuild"  // 11 (Value 3)
+    };
+#endif 
+    // 4. Parse register status
+    for (int i = 0; i < hdd_amount1; i++) {
+        // [Step A] Calculate corresponding Byte Index
+        int reg_index = i / 4;
+
+        // [Step B] Calculate corresponding Bit Shift
+        int bit_shift = (i % 4) * 2;
+
+        // [Step C] Get the Byte
+        uint8_t raw_byte = boardInfo1.cpld_reg_40_4f[reg_index];
+
+        // [Step D] Extract 2 bits status
+        uint8_t status_bits = (raw_byte >> bit_shift) & 0x03;
+
+        if (status_bits == 0x01 || status_bits == 0x03) {
+            //////////////////////////////////////////////////////////////
+            // [Step A] Calculate Byte Index (starting from 0x50)
+            int reg_index = i / 4;
+
+            // [Step B] Calculate Bit Shift
+            int bit_shift = (i % 4) * 2;
+
+            // [Step C] Get the Byte (note use of cpld_reg_50_5f)
+            uint8_t raw_byte = boardInfo1.cpld_reg_50_5f[reg_index];
+
+            // [Step D] Extract 2 bits status
+            uint8_t status_val = (raw_byte >> bit_shift) & 0x03;
+
+            // [Step E] Add to JSON
+            snprintf(key_buf, sizeof(key_buf), "NVME%d", i + 1);
+
+            // Use status_val (0~3) as index for lookup
+            cJSON_AddStringToObject(root1, key_buf1, status_map[status_val]);
+        }
+        else {
+            // [Step E] Add to JSON
+            snprintf(key_buf, sizeof(key_buf), "NVME%d", i + 1);
+            cJSON_AddStringToObject(root1, key_buf, "NA");
+        }
+    }
+
+    // 5. Output and release
+    char* out1 = cJSON_Print(root1);
+    json_printf("%s\n", out1);
+    free(out1);
+    cJSON_Delete(root1);
     return 0;
 }
 
@@ -963,9 +1140,9 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
     }
     int total_slots = boardInfo.hdd_amount;;
     uint8_t* slot_ptrs[] = {
-     boardInfo.nvme_slot_0,
-     boardInfo.nvme_slot_1,
-       boardInfo.nvme_slot_2,
+        boardInfo.nvme_slot_0,
+        boardInfo.nvme_slot_1,
+        boardInfo.nvme_slot_2,
         boardInfo.nvme_slot_3,
         boardInfo.nvme_slot_4,
         boardInfo.nvme_slot_5,
@@ -977,8 +1154,8 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_11,
         boardInfo.nvme_slot_12,
         boardInfo.nvme_slot_13,
-
-
+        boardInfo.nvme_slot_14,  // Fix: was missing, caused OOB when hdd_amount > 14
+        boardInfo.nvme_slot_15,  // Fix: was missing, caused OOB when hdd_amount > 15
     };
 
     // 2. Create JSON object
@@ -1035,6 +1212,112 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
     free(out);
     cJSON_Delete(root);
 
+
+    M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1));
+
+    
+    ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
+        {
+            return 0;
+        }
+    if (ret != 0)
+    {
+        // Prepare JSON
+        cJSON* root1 = cJSON_CreateObject();
+
+        char key_buf1[64];
+        snprintf(key_buf1, sizeof(key_buf1), "hdd read temp");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root1, key_buf1, "fail, no supports port");
+
+
+        // Print and release
+        char* out1 = cJSON_Print(root1);
+        json_printf("%s\n", out1);
+
+        free(out1);
+        cJSON_Delete(root1);
+        return -1;
+    }
+    int total_slots1 = boardInfo1.hdd_amount;;
+    uint8_t* slot_ptrs1[] = {
+        boardInfo1.nvme_slot_0,
+        boardInfo1.nvme_slot_1,
+        boardInfo1.nvme_slot_2,
+        boardInfo1.nvme_slot_3,
+        boardInfo1.nvme_slot_4,
+        boardInfo1.nvme_slot_5,
+        boardInfo1.nvme_slot_6,
+        boardInfo1.nvme_slot_7,
+        boardInfo1.nvme_slot_8,
+        boardInfo1.nvme_slot_9,
+        boardInfo1.nvme_slot_10,
+        boardInfo1.nvme_slot_11,
+        boardInfo1.nvme_slot_12,
+        boardInfo1.nvme_slot_13,
+        boardInfo1.nvme_slot_14,  // Fix: was missing, caused OOB when hdd_amount > 14
+        boardInfo1.nvme_slot_15,  // Fix: was missing, caused OOB when hdd_amount > 15
+    };
+
+    // 2. Create JSON object
+    cJSON* root1 = cJSON_CreateObject();
+
+    // 3. Add NVMECount
+    cJSON_AddNumberToObject(root1, "NVMECount", total_slots1);
+
+    // 4. Loop to generate temperature info for NVME1 ~ NVME6
+    char key_buf1[32];
+    char val_buf1[32];   
+
+    for (int i = 0; i < total_slots1; i++) {
+        // [Step A] Calculate Byte Index
+        int reg_index = i / 4;
+
+        // [Step B] Calculate Bit Shift
+        int bit_shift = (i % 4) * 2;
+
+        // [Step C] Get the Byte
+        uint8_t raw_byte = boardInfo1.cpld_reg_40_4f[reg_index];
+
+        // [Step D] Extract 2 bits status
+        uint8_t status_bits = (raw_byte >> bit_shift) & 0x03;
+
+        if (status_bits == 0x01 || status_bits == 0x03) {
+
+            /////////////////////////////////////////////////
+            uint8_t* raw_data = slot_ptrs1[i];
+            // Dynamically generate Key: NVME1, NVME2...
+            snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+
+            // Byte 3: Composite Temperature (CTemp)
+            uint8_t temp_raw = raw_data[3];
+            
+            snprintf(val_buf1, sizeof(val_buf1), "%d", (int8_t)temp_raw);
+
+            // Add to inner object
+            cJSON_AddStringToObject(root1, key_buf1, val_buf1);
+        }
+        else
+        {
+            snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+            cJSON_AddStringToObject(root1, key_buf1, "NA");
+
+        }
+        
+    }
+
+    // 5. Print and release
+    char* out1 = cJSON_Print(root1);
+    json_printf("%s\n", out1);
+
+    free(out1);
+    cJSON_Delete(root1);
+
+
+    
     return 0;
 }
 
@@ -1447,6 +1730,54 @@ int handle_bpb(int count, int argc, char* argv[]) {
     // Release memory
     free(out);
     cJSON_Delete(root);
+
+
+
+    char bpb_str_buf1[16];
+
+    // 2. Read USB data
+    M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1));
+
+     ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+     if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
+        {
+            return 0;
+        }
+    if (ret != 0)
+    {
+        // Prepare JSON
+        cJSON* root1 = cJSON_CreateObject();
+
+        char key_buf1[64];
+        snprintf(key_buf1, sizeof(key_buf1), "BPB SENSOR GET");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root1, key_buf1, "fail, no supports port");
+
+        // Print and release
+        char* out1 = cJSON_Print(root1);
+        json_printf("%s\n", out1);
+
+        free(out1);
+        cJSON_Delete(root1);
+        return -1;
+    }
+    float local_temperature1=show_temperature(boardInfo1.temp_sensor_high, boardInfo1.temp_sensor_low);
+
+    snprintf(bpb_str_buf1, sizeof(bpb_str_buf1), "%.2f", local_temperature1);
+
+    // --- cJSON Generation ---
+    cJSON* root1 = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(root1, "BPB_Temp", bpb_str_buf1);
+
+    char* out1 = cJSON_Print(root1);
+    json_printf("%s\n", out1);
+
+    // Release memory
+    free(out1);
+    cJSON_Delete(root1);
 
     return 0;
 }
@@ -1928,18 +2259,72 @@ int handle_dumpall(int count, int argc, char* argv[]) {
         dumpall_printf("cpld led register [0x%x]: 0x%x\n\r", cpld_hdd_led + loc, boardInfo.cpld_reg_60_6f[loc]);
     }
     
-    dumpall_printf("dump_nvme0\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_0[0]);
-    dumpall_printf("dump_nvme1\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_1[0]);
-    dumpall_printf("dump_nvme2\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_2[0]);
-    dumpall_printf("dump_nvme3\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_3[0]);
-    dumpall_printf("dump_nvme4\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_4[0]);
-    dumpall_printf("dump_nvme5\n\r");
-    print_nvme_basic_management_info(&boardInfo.nvme_slot_5[0]);
+    uint8_t* nvme_slots[] = {
+        boardInfo.nvme_slot_0,  boardInfo.nvme_slot_1,
+        boardInfo.nvme_slot_2,  boardInfo.nvme_slot_3,
+        boardInfo.nvme_slot_4,  boardInfo.nvme_slot_5,
+        boardInfo.nvme_slot_6,  boardInfo.nvme_slot_7,
+        boardInfo.nvme_slot_8,  boardInfo.nvme_slot_9,
+        boardInfo.nvme_slot_10, boardInfo.nvme_slot_11,
+        boardInfo.nvme_slot_12, boardInfo.nvme_slot_13,
+        boardInfo.nvme_slot_14, boardInfo.nvme_slot_15,
+    };
+    for (int i = 0; i < boardInfo.hdd_amount; i++) {
+        dumpall_printf("dump_nvme%d\n\r", i);
+        print_nvme_basic_management_info(&nvme_slots[i][0]);
+    }
+ M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1)); // Initialize to zero
+    ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+    if (ret != 0)
+    {
+        dbg_printf("read_multi false\n");
+        return -1;
+    }
+    
+     if (boardInfo1.cpld_version == 0x0 || boardInfo1.cpld_version == 0xff)
+        {        
+    return 0;
+        }
+    dumpall_printf("temperature sensor read %f celsius\n\r",
+        show_temperature(boardInfo1.temp_sensor_high, boardInfo1.temp_sensor_low));
+   
+    
+    dumpall_printf("cpld version: 0x%x\n\r", boardInfo1.cpld_version);
+    dumpall_printf("cpld test version: 0x%x\n\r", boardInfo1.cpld_test_ver);
+    dumpall_printf("cpld hdd amount: 0x%x\n\r", boardInfo1.hdd_amount);
+    dumpall_printf("cpld jtag id: 0x%x\n\r", boardInfo1.jtag_id);
+    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    {
+        dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_port_status + loc, boardInfo1.cpld_reg_40_4f[loc]);
+    }
+
+    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    {
+        dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_status + loc, boardInfo1.cpld_reg_50_5f[loc]);
+    }
+
+    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    {
+        dumpall_printf("cpld led register [0x%x]: 0x%x\n\r", cpld_hdd_led + loc, boardInfo1.cpld_reg_60_6f[loc]);
+    }
+    
+    uint8_t* nvme_slots1[] = {
+        boardInfo1.nvme_slot_0,  boardInfo1.nvme_slot_1,
+        boardInfo1.nvme_slot_2,  boardInfo1.nvme_slot_3,
+        boardInfo1.nvme_slot_4,  boardInfo1.nvme_slot_5,
+        boardInfo1.nvme_slot_6,  boardInfo1.nvme_slot_7,
+        boardInfo1.nvme_slot_8,  boardInfo1.nvme_slot_9,
+        boardInfo1.nvme_slot_10, boardInfo1.nvme_slot_11,
+        boardInfo1.nvme_slot_12, boardInfo1.nvme_slot_13,
+        boardInfo1.nvme_slot_14, boardInfo1.nvme_slot_15,
+    };
+    for (int i = 0; i < boardInfo1.hdd_amount; i++) {
+        dumpall_printf("dump_nvme%d\n\r", i);
+        print_nvme_basic_management_info(&nvme_slots1[i][0]);
+    }
+
+
 
     return 0;
 }
@@ -2092,7 +2477,7 @@ int handle_fan(int count, int argc, char* argv[]) {
         else if (STR_EQUAL(action, "Set")) {
             // Matching image 2 three types of Set usage
             // argv[0]=FAN, [1]=Duty, [2]=Set, [3]=Arg1, [4]=Arg2...
-            int is_success;
+            int is_success = 0; // Fix: initialize to avoid UB when .json branch is taken
             if (argc < 4) {
                 dbg_printf("[Error] Usage: FAN Duty Set <ID> <Duty> OR <AllDuty> OR <json_file>\n");
                 return -1;
