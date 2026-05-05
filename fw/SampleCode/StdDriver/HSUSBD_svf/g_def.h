@@ -48,6 +48,11 @@
 #define NVME_READ_REG 0x0
 #define NVME_READ_COUNT 32
 
+/* Define NCT7363Y I2C addresses */
+#define NCT7363Y_ADDR_0               0x40
+#define NCT7363Y_ADDR_1               0x42
+#define NCT7363Y_ADDR_2               0x44
+#define NCT7363Y_ADDR_3               0x46
 
 #define TEMP_RESOLUTION         0.0625f // 0.0625?XC per LSB
 

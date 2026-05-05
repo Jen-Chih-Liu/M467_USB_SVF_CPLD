@@ -272,7 +272,8 @@ void nvm_mi_read_1(void)
         }
         else
         {
-					 SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[0], 0);
+            SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[0], 0);
+
             // Select the I2C channel for the current NVMe slot.
             if (!SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
             {

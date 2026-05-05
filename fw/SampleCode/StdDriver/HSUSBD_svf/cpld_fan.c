@@ -220,9 +220,7 @@ void tempersensor_read1(void)
 #define NCT7363Y_REG_FANIN_VAL_H      0x48  // FANIN0 High Byte (+ ch*2)
 #define NCT7363Y_REG_FANIN_VAL_L      0x49  // FANIN0 Low Byte  (+ ch*2)
 
-/* Define NCT7363Y I2C addresses */
-#define NCT7363Y_ADDR_1               0x44
-#define NCT7363Y_ADDR_2               0x46
+
 
 /* ==============================================================================
  * 2. Logical Fan Definitions (Application Interface)
@@ -572,34 +570,64 @@ void fan_inital(void)
  * @param fan_address_0x46 Pointer to backup array for IC at address 0x46
  * @return 0 on success, -1 on failure
  */
-
+volatile unsigned char fan_address_0x40_d = 0;
+volatile unsigned char fan_address_0x42_d = 0;
+volatile unsigned char fan_address_0x44_d = 0;
+volatile unsigned char fan_address_0x46_d = 0;
+volatile unsigned char fan_address_0x40_back[0xff];
+volatile unsigned char fan_address_0x42_back[0xff];
 volatile unsigned char fan_address_0x44_back[0xff];
 volatile unsigned char fan_address_0x46_back[0xff];
 
+extern volatile unsigned char fan_address_0x40[0xff];
+extern volatile unsigned char fan_address_0x42[0xff];
 extern volatile unsigned char fan_address_0x44[0xff];
 extern volatile unsigned char fan_address_0x46[0xff];
 int FanIC_BackupRegisters(void)
 {
     uint16_t reg_index;
-    uint8_t data_0x44, data_0x46;
+    uint8_t data_0x40, data_0x42, data_0x44, data_0x46;
     int result = 0;
 
     // Read all registers from both fan ICs
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
-        // Read register from IC at address 0x44
-        if (I2C_ReadReg(NCT7363Y_ADDR_1, (uint8_t)reg_index, &data_0x44) == 0)
+      if (fan_address_0x40_d == 1)
         {
-            fan_address_0x44_back[reg_index] = data_0x44;
+            // Read register from IC at address 0x40
+            if (I2C_ReadReg(NCT7363Y_ADDR_0, (uint8_t)reg_index, &data_0x40) == 0)
+            {
+                fan_address_0x40_back[reg_index] = data_0x40;
+            }
         }
 
-
-        // Read register from IC at address 0x46
-        if (I2C_ReadReg(NCT7363Y_ADDR_2, (uint8_t)reg_index, &data_0x46) == 0)
+        if (fan_address_0x42_d == 1)
         {
-            fan_address_0x46_back[reg_index] = data_0x46;
+            // Read register from IC at address 0x42
+            if (I2C_ReadReg(NCT7363Y_ADDR_1, (uint8_t)reg_index, &data_0x42) == 0)
+            {
+                fan_address_0x42_back[reg_index] = data_0x42;
+            }
         }
-    }
+
+        if (fan_address_0x44_d == 1)
+        {
+            // Read register from IC at address 0x44
+            if (I2C_ReadReg(NCT7363Y_ADDR_2, (uint8_t)reg_index, &data_0x44) == 0)
+            {
+                fan_address_0x44_back[reg_index] = data_0x44;
+            }
+        }
+
+        if (fan_address_0x46_d == 1)
+        {
+            // Read register from IC at address 0x46
+            if (I2C_ReadReg(NCT7363Y_ADDR_3, (uint8_t)reg_index, &data_0x46) == 0)
+            {
+                fan_address_0x46_back[reg_index] = data_0x46;
+            }
+        }
+    } // end for loop
 
     return result;
 }
@@ -612,8 +640,27 @@ int FanIC_Backup_init(void)
     // Read all registers from both fan ICs
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
-        fan_address_0x44[reg_index] = fan_address_0x44_back[reg_index];
-        fan_address_0x46[reg_index] = fan_address_0x46_back[reg_index];
+        if (fan_address_0x40_d == 1)
+        {
+            fan_address_0x40[reg_index] = fan_address_0x40_back[reg_index];
+        }
+
+
+        if (fan_address_0x42_d == 1)
+        {
+            fan_address_0x42[reg_index] = fan_address_0x42_back[reg_index];
+        }
+
+        if (fan_address_0x44_d == 1)
+        {
+            fan_address_0x44[reg_index] = fan_address_0x44_back[reg_index];
+        }
+
+        if (fan_address_0x46_d == 1)
+        {
+            fan_address_0x46[reg_index] = fan_address_0x46_back[reg_index];
+        }
+
     }
 }
 
@@ -671,46 +718,107 @@ int FanIC_CompareAndRestore(void)
     uint16_t reg_index;
     int restore_count = 0;
 
-    // Compare and restore registers for IC at address 0x44
-    for (reg_index = 0; reg_index < 0xFF; reg_index++)
-    {
-        // Skip read-only registers
-        if (Is_Register_ReadOnly((uint8_t)reg_index))
-        {
-            continue;
-        }
 
-        // Check if current value differs from backup
-        if (fan_address_0x44[reg_index] != fan_address_0x44_back[reg_index])
+    if (fan_address_0x40_d == 1)
+    {
+        // Compare and restore registers for IC at address 0x40
+        for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
-            // Write new value to I2C register
-            if (I2C_WriteReg(NCT7363Y_ADDR_1, (uint8_t)reg_index, fan_address_0x44[reg_index]) == 0)
+            // Skip read-only registers
+            if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                // Update backup with the new value
-                fan_address_0x44_back[reg_index] = fan_address_0x44[reg_index];
-                restore_count++;
+                continue;
+            }
+
+            // Check if current value differs from backup
+            if (fan_address_0x40[reg_index] != fan_address_0x40_back[reg_index])
+            {
+                // Write new value to I2C register
+                if (I2C_WriteReg(NCT7363Y_ADDR_0, (uint8_t)reg_index, fan_address_0x40[reg_index]) == 0)
+                {
+                    // Update backup with the new value
+                    fan_address_0x40_back[reg_index] = fan_address_0x40[reg_index];
+                    restore_count++;
+                }
             }
         }
     }
 
-    // Compare and restore registers for IC at address 0x46
-    for (reg_index = 0; reg_index < 0xFF; reg_index++)
+    if (fan_address_0x42_d == 1)
     {
-        // Skip read-only registers
-        if (Is_Register_ReadOnly((uint8_t)reg_index))
+        // Compare and restore registers for IC at address 0x42
+        // Compare and restore registers for IC at address 0x44
+        for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
-            continue;
-        }
-
-        // Check if current value differs from backup
-        if (fan_address_0x46[reg_index] != fan_address_0x46_back[reg_index])
-        {
-            // Write new value to I2C register
-            if (I2C_WriteReg(NCT7363Y_ADDR_2, (uint8_t)reg_index, fan_address_0x46[reg_index]) == 0)
+            // Skip read-only registers
+            if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                // Update backup with the new value
-                fan_address_0x46_back[reg_index] = fan_address_0x46[reg_index];
-                restore_count++;
+                continue;
+            }
+
+            // Check if current value differs from backup
+            if (fan_address_0x42[reg_index] != fan_address_0x42_back[reg_index])
+            {
+                // Write new value to I2C register
+                if (I2C_WriteReg(NCT7363Y_ADDR_1, (uint8_t)reg_index, fan_address_0x42[reg_index]) == 0)
+                {
+                    // Update backup with the new value
+                    fan_address_0x42_back[reg_index] = fan_address_0x42[reg_index];
+                    restore_count++;
+                }
+            }
+        }
+    }
+
+
+
+    if (fan_address_0x44_d == 1)
+    {
+        // Compare and restore registers for IC at address 0x42
+        // Compare and restore registers for IC at address 0x44
+        for (reg_index = 0; reg_index < 0xFF; reg_index++)
+        {
+            // Skip read-only registers
+            if (Is_Register_ReadOnly((uint8_t)reg_index))
+            {
+                continue;
+            }
+
+            // Check if current value differs from backup
+            if (fan_address_0x44[reg_index] != fan_address_0x44_back[reg_index])
+            {
+                // Write new value to I2C register
+                if (I2C_WriteReg(NCT7363Y_ADDR_2, (uint8_t)reg_index, fan_address_0x44[reg_index]) == 0)
+                {
+                    // Update backup with the new value
+                    fan_address_0x44_back[reg_index] = fan_address_0x44[reg_index];
+                    restore_count++;
+                }
+            }
+        }
+    }
+
+    if (fan_address_0x46_d == 1)
+    {
+        // Compare and restore registers for IC at address 0x46
+        for (reg_index = 0; reg_index < 0xFF; reg_index++)
+        {
+            // Skip read-only registers
+            if (Is_Register_ReadOnly((uint8_t)reg_index))
+            {
+                continue;
+            }
+
+            // Check if current value differs from backup
+            if (fan_address_0x46[reg_index] != fan_address_0x46_back[reg_index])
+            {
+                // Write new value to I2C register
+                if (I2C_WriteReg(NCT7363Y_ADDR_3, (uint8_t)reg_index, fan_address_0x46[reg_index]) == 0)
+                {
+                    // Update backup with the new value
+                    fan_address_0x46_back[reg_index] = fan_address_0x46[reg_index];
+                    restore_count++;
+                }
             }
         }
     }

@@ -12,6 +12,10 @@
 #include "hid_transfer.h"
 #include <string.h>
 #include "g_def.h"
+extern volatile unsigned char fan_address_0x40_d ;
+extern volatile unsigned char fan_address_0x42_d ;
+extern volatile unsigned char fan_address_0x44_d ;
+extern volatile unsigned char fan_address_0x46_d ;
 volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) = {0};
 volatile uint8_t bmc_report1[1024] __attribute__((aligned(4))) = {0};
 extern volatile uint8_t string_received;
@@ -225,9 +229,23 @@ void I2C4_Init(void)
     /* Get I2C0 Bus Clock */
     printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
 
-
-    I2C_SetSlaveAddr(I2C4, 0, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
-    I2C_SetSlaveAddr(I2C4, 1, 0x46, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+	if (fan_address_0x40_d==1)
+	{
+    I2C_SetSlaveAddr(I2C4, 0, 0x40, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
+	}
+	
+		if (fan_address_0x42_d==1)
+		{
+    I2C_SetSlaveAddr(I2C4, 1, 0x42, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+		}
+			if (fan_address_0x44_d==1)
+			{
+	  I2C_SetSlaveAddr(I2C4, 2, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+		}
+	if (fan_address_0x46_d==1)
+	{
+	  I2C_SetSlaveAddr(I2C4, 3, 0x46, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+	}
 
     I2C_EnableInt(I2C4);
     NVIC_EnableIRQ(I2C4_IRQn);
@@ -259,6 +277,8 @@ void I2C4_IRQHandler(void)
 
 volatile unsigned char fan_address_index = 0;
 volatile unsigned char fan_reg_index = 0;
+volatile unsigned char fan_address_0x40[0xff] = {0};
+volatile unsigned char fan_address_0x42[0xff] = {0};
 volatile unsigned char fan_address_0x44[0xff] = {0};
 volatile unsigned char fan_address_0x46[0xff] = {0};
 volatile unsigned char g_au8SlvData[32] = {0};
@@ -297,7 +317,7 @@ void I2C_SlaveTRx(uint32_t u32Status)
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
 
-        fan_reg_index++;
+        if (fan_reg_index < 0xFE) fan_reg_index++;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
     else if (u32Status == 0xB8)                 /* Data byte in I2CDAT has been transmitted ACK has been received */
@@ -311,7 +331,7 @@ void I2C_SlaveTRx(uint32_t u32Status)
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
 
-        fan_reg_index++;
+        if (fan_reg_index < 0xFE) fan_reg_index++;
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
     }
     else if (u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
@@ -328,20 +348,15 @@ void I2C_SlaveTRx(uint32_t u32Status)
     else if (u32Status == 0xA0)                 /* A STOP or repeated START has been received while still
                                              addressed as Slave/Receiver*/
     {
-        if (g_u8SlvDataLen == 3)
+        if (g_u8SlvDataLen == 2) /* SMBus Write Byte: 1 command byte + 1 data byte */
         {
-            if (g_au8SlvData[0] < 0xFE) /* Guard: index+1 must be within [0xFF] bounds (0x00~0xFE) */
+            if (fan_address_index == (0x44 >> 1))
             {
-                if (fan_address_index == (0x44 >> 1))
-                {
-                    fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
-                    fan_address_0x44[g_au8SlvData[0] + 1] = g_au8SlvData[2];
-                }
-                else if (fan_address_index == (0x46 >> 1))
-                {
-                    fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
-                    fan_address_0x46[g_au8SlvData[0] + 1] = g_au8SlvData[2];
-                }
+                fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
+            }
+            else if (fan_address_index == (0x46 >> 1))
+            {
+                fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
             }
         }
         else if (g_u8SlvDataLen == 1)
@@ -478,6 +493,33 @@ uint32_t I2C_WriteMultiBytes_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t dat
     return u32txLen;                                                    /* Return bytes length that have been transmitted */
 }
 
+int I2C_WriteReg_test(uint8_t i2c_addr, uint8_t reg, uint8_t data)
+{
+    uint8_t temp_buf[2];
+    temp_buf[0] = reg;
+    temp_buf[1] = data;
+
+    // The project's I2C functions use a 7-bit address.
+    if (I2C_WriteMultiBytes(I2C0, i2c_addr >> 1, temp_buf, 2) == 2)
+    {
+        return 0; // Success
+    }
+
+    return -1; // Fail
+}
+
+int I2C_ReadReg_test(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
+{
+    // Set the register pointer first
+    if (I2C_WriteByte(I2C0, i2c_addr >> 1, reg) != 0)
+    {
+        return -1; // Fail to write register address
+    }
+
+    // Then read the data
+    *data = I2C_ReadByte(I2C0, i2c_addr >> 1);
+    return 0; // Success
+}
 
 uint8_t I2C_WriteByte_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data)
 {
@@ -725,15 +767,37 @@ cpld1_init:
     TIMER_EnableInt(TIMER0);
     NVIC_EnableIRQ(TMR0_IRQn);
     TIMER_Start(TIMER0);
-    // Initialize the fan controller.
-    // fan_inital();
-    //FanIC_Backup_init();
-    // I2C4_Init();
-    //   s_I2C4HandlerFn = I2C_SlaveTRx;
-    // I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+
+		
+    PC14 = 0;
+		unsigned char data_loa=0;
+		    if (I2C_ReadReg_test(NCT7363Y_ADDR_0, 0, &data_loa) == 0)
+		{
+	  fan_address_0x40_d = 1;
+		}
+		
+    if (I2C_ReadReg_test(NCT7363Y_ADDR_1, 0, &data_loa) == 0)
+		{
+	  fan_address_0x42_d = 1;
+		}
+		
+		  if (I2C_ReadReg_test(NCT7363Y_ADDR_2, 0, &data_loa) == 0)
+		{
+	  fan_address_0x44_d = 1;
+		}
+				  if (I2C_ReadReg_test(NCT7363Y_ADDR_3, 0, &data_loa) == 0)
+		{
+	  fan_address_0x46_d = 1;
+		}
+		
+    FanIC_Backup_init();
+    PC14 = 1;
+     I2C4_Init();
+     s_I2C4HandlerFn = I2C_SlaveTRx;
+     I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     //smbus sel
-
-
+		
+		
     //9848 SMBus reset
     GPIO_SetMode(PB, BIT6, GPIO_MODE_OUTPUT);
     EADC_Open(EADC0, EADC_CTL_DIFFEN_SINGLE_END);
@@ -765,8 +829,8 @@ cpld1_init:
             {
                 if (PC14 == 0)
                 {
-                    // FanIC_BackupRegisters();
-                    //FanIC_CompareAndRestore();
+                    FanIC_BackupRegisters();
+                    FanIC_CompareAndRestore();
                     CPLD_read();          // Read CPLD status.
                     //fan_read();           // Read fan speed and duty cycle.
                     tempersensor_read();  // Read temperature sensor.
