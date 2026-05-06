@@ -37,6 +37,7 @@ unsigned char i2c_read_bytes, i2c_write_bytes;
 volatile int cpld_false_flag = 0;
 int pos = 0;
 volatile uint32_t timer0_count = 0 ;
+volatile uint32_t i2c4_idle_timer = 0 ; /* ms counter: time since last I2C4 packet */
 
 volatile unsigned char i2c_monitor_flag = 1;
 volatile unsigned char reset_var = 0xa5;
@@ -292,6 +293,7 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         g_u8SlvDataLen = 0;
         fan_address_index = I2C_GET_DATA(I2C4) >> 1;
+        i2c4_idle_timer = 0; /* Reset watchdog on every new I2C4 transaction */
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
     else if (u32Status == 0x80)                 /* Previously address with own SLA address
@@ -307,6 +309,7 @@ void I2C_SlaveTRx(uint32_t u32Status)
     else if (u32Status == 0xA8)                 /* Own SLA+R has been receive; ACK has been return */
     {
         fan_address_index = I2C_GET_DATA(I2C4) >> 1;
+        i2c4_idle_timer = 0; /* Reset watchdog on read transaction */
 
         if (fan_address_index == (0x44 >> 1))
         {
@@ -317,12 +320,23 @@ void I2C_SlaveTRx(uint32_t u32Status)
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
 
-        if (fan_reg_index < 0xFE) fan_reg_index++;
+        if (fan_reg_index < 0xFE) 
+				{
+					fan_reg_index++;
+				}
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
     else if (u32Status == 0xB8)                 /* Data byte in I2CDAT has been transmitted ACK has been received */
     {
-        if (fan_address_index == (0x44 >> 1))
+			if (fan_address_index == (0x40 >> 1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x40[fan_reg_index]);
+        }
+        else if (fan_address_index == (0x42 >> 1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x42[fan_reg_index]);
+        }
+        else if (fan_address_index == (0x44 >> 1))
         {
             I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
         }
@@ -331,7 +345,10 @@ void I2C_SlaveTRx(uint32_t u32Status)
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
 
-        if (fan_reg_index < 0xFE) fan_reg_index++;
+        if (fan_reg_index < 0xFE) 
+				{
+					fan_reg_index++;
+				}
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
     }
     else if (u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
@@ -350,7 +367,15 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         if (g_u8SlvDataLen == 2) /* SMBus Write Byte: 1 command byte + 1 data byte */
         {
-            if (fan_address_index == (0x44 >> 1))
+          if (fan_address_index == (0x40 >> 1))
+            {
+                fan_address_0x40[g_au8SlvData[0]] = g_au8SlvData[1];
+            }
+             else if (fan_address_index == (0x42 >> 1))
+            {
+                fan_address_0x42[g_au8SlvData[0]] = g_au8SlvData[1];
+            } 
+					else if (fan_address_index == (0x44 >> 1))
             {
                 fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
             }
@@ -407,6 +432,7 @@ void TMR0_IRQHandler(void)
         TIMER_ClearIntFlag(TIMER0);
 
         timer0_count++;
+        i2c4_idle_timer++; /* Count ms for I2C4 watchdog */
     }
 }
 
@@ -416,6 +442,48 @@ void EADC00_IRQHandler(void)
 {
     g_u32AdcIntFlag = 1;
     EADC_CLR_INT_FLAG(EADC0, EADC_STATUS2_ADIF0_Msk);      /* Clear the A/D ADINT0 interrupt flag */
+}
+
+/**
+ * @brief  Write a single register to NCT7363Y via I2C0.
+ */
+static void NCT7363Y_WriteReg(uint8_t dev_addr_8bit, uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2];
+    buf[0] = reg;
+    buf[1] = val;
+    I2C_WriteMultiBytes(I2C0, dev_addr_8bit >> 1, buf, 2);
+}
+
+/**
+ * @brief  Set all active NCT7363Y fan ICs to full speed (PWM duty = 0xFF).
+ *         Called when I2C4 has been idle for 30 seconds and PC14 == 0.
+ *         NCT7363Y PWM duty output registers: 0x30~0x3F (PWM1~PWM16).
+ */
+void NCT7363Y_SetFullSpeed(void)
+{
+    uint8_t pwm_reg;
+
+    /* PWM duty registers 0x30~0x3F correspond to PWM channel 1~16 */
+    for (pwm_reg = 0x90; pwm_reg <= 0xAE; pwm_reg++)
+    {
+        if (fan_address_0x40_d == 1)
+            fan_address_0x40[pwm_reg] = 0xFF; // Set new value in current array
+           // NCT7363Y_WriteReg(NCT7363Y_ADDR_0, pwm_reg, 0xFF);           
+        if (fan_address_0x42_d == 1)
+            fan_address_0x42[pwm_reg] = 0xFF; // Set new value in current array
+          //  NCT7363Y_WriteReg(NCT7363Y_ADDR_1, pwm_reg, 0xFF);
+          
+        if (fan_address_0x44_d == 1)
+            fan_address_0x44[pwm_reg] = 0xFF; // Set new value in current array
+           // NCT7363Y_WriteReg(NCT7363Y_ADDR_2, pwm_reg, 0xFF);
+
+        if (fan_address_0x46_d == 1)
+            fan_address_0x46[pwm_reg] = 0xFF; // Set new value in current array
+         //   NCT7363Y_WriteReg(NCT7363Y_ADDR_3, pwm_reg, 0xFF);
+    }
+
+    printf("[Watchdog] I2C4 idle 30s, NCT7363Y set to full speed!\n");
 }
 
 uint32_t I2C_WriteMultiBytes_detect(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t data[], uint32_t u32wLen)
@@ -849,6 +917,14 @@ cpld1_init:
 
 #endif
             timer0_count = 0;
+        }
+
+        /* I2C4 watchdog: if no packet received for 30 seconds and PC14 == 0,
+         * force all NCT7363Y fan ICs to full speed as a safety measure. */
+        if (i2c4_idle_timer >= 30000 && PC14 == 0)
+        {
+            NCT7363Y_SetFullSpeed();
+            i2c4_idle_timer = 0; /* Reset to avoid repeated calls every ms */
         }
 
 
