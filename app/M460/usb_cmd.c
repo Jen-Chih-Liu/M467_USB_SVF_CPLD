@@ -2060,6 +2060,138 @@ sleep_seconds_svf(0.3); // Short delay to ensure EEPROM write completion
 }
 
 /**
+ * @brief Reads 256 bytes from MCU's FRU0 EEPROM using command 0xC2.
+ *
+ * @param usb_cnt  USB device index.
+ * @param out_buf  Caller-supplied buffer of at least 256 bytes to receive data.
+ * @return 0 on success, non-zero on failure.
+ */
+int usbd_multi_mcu_eeprom_read(unsigned char usb_cnt, unsigned char* out_buf)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1;
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) { libusb_exit(ctx); return 1; }
+
+    scan_and_update_map(ctx, devs, cnt);
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0) { libusb_exit(ctx); return 1; }
+
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0)
+        {
+            int actual_length = 0;
+            char cmd_read[PACKET_SIZE] = { 0 };
+            unsigned char readback[transfer_size] = { 0 };
+
+            cmd_read[0] = (char)0xc2; // FRU0 read command
+            r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_read, PACKET_SIZE, &actual_length, 0);
+            sleep_seconds_svf(0.3);
+            if (r == 0)
+            {
+                actual_length = 0;
+                r = libusb_interrupt_transfer(handle, ep_in, readback, sizeof(readback), &actual_length, 1000);
+                if (r == 0)
+                {
+                    if (actual_length < 257 || readback[0] != (unsigned char)0xc2)
+                    {
+                        printf("EEPROM read response invalid, len=%d, cmd=0x%02x\n", actual_length, readback[0]);
+                        r = -1;
+                    }
+                    else
+                    {
+                        memcpy(out_buf, &readback[1], 256);
+                    }
+                }
+            }
+
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+    clear_map();
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
+/**
+ * @brief Reads 256 bytes from MCU's FRU1 EEPROM using command 0xC6.
+ *
+ * @param usb_cnt  USB device index.
+ * @param out_buf  Caller-supplied buffer of at least 256 bytes to receive data.
+ * @return 0 on success, non-zero on failure.
+ */
+int usbd_multi_mcu_eeprom_read_FRU1(unsigned char usb_cnt, unsigned char* out_buf)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1;
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) { libusb_exit(ctx); return 1; }
+
+    scan_and_update_map(ctx, devs, cnt);
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0) { libusb_exit(ctx); return 1; }
+
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0)
+        {
+            int actual_length = 0;
+            char cmd_read[PACKET_SIZE] = { 0 };
+            unsigned char readback[transfer_size] = { 0 };
+
+            cmd_read[0] = (char)0xc6; // FRU1 read command
+            r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_read, PACKET_SIZE, &actual_length, 0);
+            sleep_seconds_svf(0.3);
+            if (r == 0)
+            {
+                actual_length = 0;
+                r = libusb_interrupt_transfer(handle, ep_in, readback, sizeof(readback), &actual_length, 1000);
+                if (r == 0)
+                {
+                    if (actual_length < 257 || readback[0] != (unsigned char)0xc6)
+                    {
+                        printf("EEPROM read response invalid, len=%d, cmd=0x%02x\n", actual_length, readback[0]);
+                        r = -1;
+                    }
+                    else
+                    {
+                        memcpy(out_buf, &readback[1], 256);
+                    }
+                }
+            }
+
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+    clear_map();
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
+/**
  * @brief Sends an 0xDC command to control a specific GPIO on the MCU.
  */
 int usbd_multi_MCU_GPIO_SET(unsigned char usb_cnt, unsigned char gpio_num, unsigned char gpio_val)

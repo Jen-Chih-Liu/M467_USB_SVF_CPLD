@@ -1074,8 +1074,8 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x04;
-                response_buff[2] = 0x20;
+                response_buff[1] = 0x05;
+                response_buff[2] = 0x19;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.

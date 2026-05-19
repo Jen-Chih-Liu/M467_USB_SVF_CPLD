@@ -575,7 +575,7 @@ int cpld_svf_update(unsigned char usb_cnt, char* svf_file, char* fail_reason_buf
               //  snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC");
             //}
             //else {
-                snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC, %s (Line %d): %s", cpld_error_to_string(status), error_line_index, failed_cmd);
+                snprintf(fail_reason_buf, buf_len, "CPLD Programming File Mismatch with CPLD IC, %s (Line %d)", cpld_error_to_string(status), error_line_index);
             //}
         }
     }

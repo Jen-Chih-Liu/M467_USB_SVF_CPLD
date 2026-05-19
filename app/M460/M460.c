@@ -2699,18 +2699,85 @@ int handle_eeprom(int count, int argc, char* argv[]) {
     cmd_printf("[CMD] Count=%d, Action=FRU Operation: %s\n", count, argv[1]);
 
     // Validate arguments
-    if (argc < 3) {
-        dbg_printf("[Error] Usage: FRU <WRITE> <File>\n");
+    if (argc < 2) {
+        dbg_printf("[Error] Usage: FRU <READ0/READ1> or FRU <WRITE0/WRITE1> <File>\n");
         return -1;
     }
 
-
     char* target = argv[1];
-    char* filepath = argv[2];
+
+    // WRITE commands require a file path argument
+    if ((STR_EQUAL(target, "WRITE0") || STR_EQUAL(target, "WRITE1")) && argc < 3) {
+        dbg_printf("[Error] Usage: FRU <WRITE0/WRITE1> <File>\n");
+        return -1;
+    }
+
+    char* filepath = (argc >= 3) ? argv[2] : NULL;
     int EEPROM_result = RES_FALSE; // Default to fail
     char fail_reason[128] = { 0 }; // Initialize buffer
     int result = 0;
     
+
+    if (STR_EQUAL(target, "READ0") || STR_EQUAL(target, "READ1"))
+    {
+        unsigned char eeprom_data[256] = { 0 };
+        int read_result;
+
+        // --- Backup GPIO 40 state ---
+        uint8_t gpio40_backup = 0;
+        usb_multi_gpio_get_var(count, 40, &gpio40_backup);
+
+        // --- Set GPIO 40 to 0 ---
+        usbd_multi_MCU_GPIO_SET(count, 40, 0);
+     sleep_seconds(0.5);
+        if (STR_EQUAL(target, "READ0"))
+            read_result = usbd_multi_mcu_eeprom_read((unsigned char)count, eeprom_data);
+        else
+            read_result = usbd_multi_mcu_eeprom_read_FRU1((unsigned char)count, eeprom_data);
+
+        // --- Restore GPIO 40 state ---
+        usbd_multi_MCU_GPIO_SET(count, 40, gpio40_backup);
+
+        if (read_result != 0)
+        {
+            cJSON* root = cJSON_CreateObject();
+            cJSON_AddStringToObject(root, "Read Task", "Fail");
+            char* out = cJSON_PrintUnformatted(root);
+            dbg_printf("%s\n", out);
+            free(out);
+            cJSON_Delete(root);
+            return -1;
+        }
+#if 0
+        // Print as hex dump, 16 bytes per row
+        dbg_printf("EEPROM %s Contents (256 bytes):\n", target);
+        for (int row = 0; row < 16; row++)
+        {
+            dbg_printf("%02X: ", row * 16);
+            for (int col = 0; col < 16; col++)
+            {
+                dbg_printf("%02X ", eeprom_data[row * 16 + col]);
+            }
+            dbg_printf("\n");
+        }
+#endif
+        // Also output as JSON hex string array
+        cJSON* root = cJSON_CreateObject();
+        cJSON* arr = cJSON_CreateArray();
+        for (int i = 0; i < 256; i++)
+        {
+            char hex_str[5];
+            snprintf(hex_str, sizeof(hex_str), "0x%02X", eeprom_data[i]);
+            cJSON_AddItemToArray(arr, cJSON_CreateString(hex_str));
+        }
+        cJSON_AddItemToObject(root, "EEPROM", arr);
+        char* out = cJSON_PrintUnformatted(root);
+        json_printf("%s\n", out);
+        free(out);
+        cJSON_Delete(root);
+
+        return 0;
+    }
 
     if (STR_EQUAL(target, "WRITE0"))
     {
@@ -2721,8 +2788,18 @@ int handle_eeprom(int count, int argc, char* argv[]) {
             goto create_json; // Jump to JSON generation
         }
 
+        // --- Backup GPIO 40 state ---
+        uint8_t gpio40_backup = 0;
+        usb_multi_gpio_get_var(count, 40, &gpio40_backup);
+
+        // --- Set GPIO 40 to 0 ---
+        usbd_multi_MCU_GPIO_SET(count, 40, 0);
+     sleep_seconds(0.5);
         // --- Core modification: receive return value ---
         EEPROM_result = usbd_multi_mcu_eeprom_write((unsigned char)count, filepath);
+
+        // --- Restore GPIO 40 state ---
+        usbd_multi_MCU_GPIO_SET(count, 40, gpio40_backup);
 
     create_json:
         // 4. Create JSON response
@@ -2757,8 +2834,18 @@ int handle_eeprom(int count, int argc, char* argv[]) {
             goto create_json1; // Jump to JSON generation
         }
 
+        // --- Backup GPIO 40 state ---
+        uint8_t gpio40_backup = 0;
+        usb_multi_gpio_get_var(count, 40, &gpio40_backup);
+
+        // --- Set GPIO 40 to 0 ---
+        usbd_multi_MCU_GPIO_SET(count, 40, 0);
+        sleep_seconds(0.5);
         // --- Core modification: receive return value ---
         EEPROM_result = usbd_multi_mcu_eeprom_write_FRU1((unsigned char)count, filepath);
+
+        // --- Restore GPIO 40 state ---
+        usbd_multi_MCU_GPIO_SET(count, 40, gpio40_backup);
 
     create_json1:
         // 4. Create JSON response
@@ -2781,6 +2868,7 @@ int handle_eeprom(int count, int argc, char* argv[]) {
         free(out);
         cJSON_Delete(root);
     }
+    
 
 
      return 0;
