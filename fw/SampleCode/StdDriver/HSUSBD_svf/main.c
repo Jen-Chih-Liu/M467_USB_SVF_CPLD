@@ -232,20 +232,20 @@ void I2C4_Init(void)
 
 	if (fan_address_0x40_d==1)
 	{
-    I2C_SetSlaveAddr(I2C4, 0, 0x40, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
+    I2C_SetSlaveAddr(I2C4, 0, NCT7363Y_ADDR_0, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
 	}
 	
 		if (fan_address_0x42_d==1)
 		{
-    I2C_SetSlaveAddr(I2C4, 1, 0x42, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+    I2C_SetSlaveAddr(I2C4, 1, NCT7363Y_ADDR_1, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
 		}
 			if (fan_address_0x44_d==1)
 			{
-	  I2C_SetSlaveAddr(I2C4, 2, 0x44, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+	  I2C_SetSlaveAddr(I2C4, 2, NCT7363Y_ADDR_2, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
 		}
 	if (fan_address_0x46_d==1)
 	{
-	  I2C_SetSlaveAddr(I2C4, 3, 0x46, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
+	  I2C_SetSlaveAddr(I2C4, 3, NCT7363Y_ADDR_3, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
 	}
 
     I2C_EnableInt(I2C4);
@@ -311,11 +311,19 @@ void I2C_SlaveTRx(uint32_t u32Status)
         fan_address_index = I2C_GET_DATA(I2C4) >> 1;
         i2c4_idle_timer = 0; /* Reset watchdog on read transaction */
 
-        if (fan_address_index == (0x44 >> 1))
+        if (fan_address_index == (NCT7363Y_ADDR_0))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x40[fan_reg_index]);
+        }
+        else if (fan_address_index == (NCT7363Y_ADDR_1))
+        {
+            I2C_SET_DATA(I2C4, fan_address_0x42[fan_reg_index]);
+        }
+				     else if (fan_address_index == (NCT7363Y_ADDR_2))
         {
             I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
         }
-        else if (fan_address_index == (0x46 >> 1))
+				     else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
@@ -328,19 +336,19 @@ void I2C_SlaveTRx(uint32_t u32Status)
     }
     else if (u32Status == 0xB8)                 /* Data byte in I2CDAT has been transmitted ACK has been received */
     {
-			if (fan_address_index == (0x40 >> 1))
+			if (fan_address_index == (NCT7363Y_ADDR_0))
         {
             I2C_SET_DATA(I2C4, fan_address_0x40[fan_reg_index]);
         }
-        else if (fan_address_index == (0x42 >> 1))
+        else if (fan_address_index == (NCT7363Y_ADDR_1))
         {
             I2C_SET_DATA(I2C4, fan_address_0x42[fan_reg_index]);
         }
-        else if (fan_address_index == (0x44 >> 1))
+        else if (fan_address_index == (NCT7363Y_ADDR_2))
         {
             I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
         }
-        else if (fan_address_index == (0x46 >> 1))
+        else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
         }
@@ -367,19 +375,19 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         if (g_u8SlvDataLen == 2) /* SMBus Write Byte: 1 command byte + 1 data byte */
         {
-          if (fan_address_index == (0x40 >> 1))
+          if (fan_address_index == (NCT7363Y_ADDR_0))
             {
                 fan_address_0x40[g_au8SlvData[0]] = g_au8SlvData[1];
             }
-             else if (fan_address_index == (0x42 >> 1))
+             else if (fan_address_index == (NCT7363Y_ADDR_1))
             {
                 fan_address_0x42[g_au8SlvData[0]] = g_au8SlvData[1];
             } 
-					else if (fan_address_index == (0x44 >> 1))
+					else if (fan_address_index == (NCT7363Y_ADDR_2))
             {
                 fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
             }
-            else if (fan_address_index == (0x46 >> 1))
+            else if (fan_address_index == (NCT7363Y_ADDR_3))
             {
                 fan_address_0x46[g_au8SlvData[0]] = g_au8SlvData[1];
             }
@@ -568,7 +576,7 @@ int I2C_WriteReg_test(uint8_t i2c_addr, uint8_t reg, uint8_t data)
     temp_buf[1] = data;
 
     // The project's I2C functions use a 7-bit address.
-    if (I2C_WriteMultiBytes(I2C0, i2c_addr >> 1, temp_buf, 2) == 2)
+    if (I2C_WriteMultiBytes(I2C0, i2c_addr, temp_buf, 2) == 2)
     {
         return 0; // Success
     }
@@ -579,13 +587,13 @@ int I2C_WriteReg_test(uint8_t i2c_addr, uint8_t reg, uint8_t data)
 int I2C_ReadReg_test(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
 {
     // Set the register pointer first
-    if (I2C_WriteByte(I2C0, i2c_addr >> 1, reg) != 0)
+    if (I2C_WriteByte(I2C0, i2c_addr, reg) != 0)
     {
         return -1; // Fail to write register address
     }
 
     // Then read the data
-    *data = I2C_ReadByte(I2C0, i2c_addr >> 1);
+    *data = I2C_ReadByte(I2C0, i2c_addr);
     return 0; // Success
 }
 

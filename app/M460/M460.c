@@ -2740,41 +2740,26 @@ int handle_eeprom(int count, int argc, char* argv[]) {
 
         if (read_result != 0)
         {
-            cJSON* root = cJSON_CreateObject();
-            cJSON_AddStringToObject(root, "Read Task", "Fail");
-            char* out = cJSON_PrintUnformatted(root);
-            dbg_printf("%s\n", out);
-            free(out);
-            cJSON_Delete(root);
+            //cJSON* root = cJSON_CreateObject();
+            //cJSON_AddStringToObject(root, "Read Task", "Fail");
+            //char* out = cJSON_PrintUnformatted(root);
+            dbg_printf("FRU READ FAIL\n\r");
+            //free(out);
+            //cJSON_Delete(root);
             return -1;
         }
-#if 0
-        // Print as hex dump, 16 bytes per row
-        dbg_printf("EEPROM %s Contents (256 bytes):\n", target);
+        // Print header row
+        dbg_printf("   0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
+        // Print hex dump, 16 bytes per row (i2cdump style)
         for (int row = 0; row < 16; row++)
         {
-            dbg_printf("%02X: ", row * 16);
+            dbg_printf("%02x:", row * 16);
             for (int col = 0; col < 16; col++)
             {
-                dbg_printf("%02X ", eeprom_data[row * 16 + col]);
+                dbg_printf(" %02x", eeprom_data[row * 16 + col]);
             }
             dbg_printf("\n");
         }
-#endif
-        // Also output as JSON hex string array
-        cJSON* root = cJSON_CreateObject();
-        cJSON* arr = cJSON_CreateArray();
-        for (int i = 0; i < 256; i++)
-        {
-            char hex_str[5];
-            snprintf(hex_str, sizeof(hex_str), "0x%02X", eeprom_data[i]);
-            cJSON_AddItemToArray(arr, cJSON_CreateString(hex_str));
-        }
-        cJSON_AddItemToObject(root, "EEPROM", arr);
-        char* out = cJSON_PrintUnformatted(root);
-        json_printf("%s\n", out);
-        free(out);
-        cJSON_Delete(root);
 
         return 0;
     }
