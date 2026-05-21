@@ -727,6 +727,7 @@ int FanIC_CompareAndRestore(void)
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
+                fan_address_0x40[reg_index]=fan_address_0x40_back[reg_index];
                 continue;
             }
 
@@ -753,6 +754,7 @@ int FanIC_CompareAndRestore(void)
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
+                fan_address_0x42[reg_index]=fan_address_0x42_back[reg_index];
                 continue;
             }
 
@@ -781,6 +783,7 @@ int FanIC_CompareAndRestore(void)
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
+                fan_address_0x44[reg_index]=fan_address_0x44_back[reg_index];
                 continue;
             }
 
@@ -806,6 +809,7 @@ int FanIC_CompareAndRestore(void)
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
+                fan_address_0x46[reg_index]=fan_address_0x46_back[reg_index];
                 continue;
             }
 

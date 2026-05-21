@@ -230,23 +230,18 @@ void I2C4_Init(void)
     /* Get I2C0 Bus Clock */
     printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
 
-	if (fan_address_0x40_d==1)
-	{
-    I2C_SetSlaveAddr(I2C4, 0, NCT7363Y_ADDR_0, I2C_GCMODE_DISABLE);   /* Slave Address : 0x15 */
-	}
-	
-		if (fan_address_0x42_d==1)
-		{
-    I2C_SetSlaveAddr(I2C4, 1, NCT7363Y_ADDR_1, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
-		}
-			if (fan_address_0x44_d==1)
-			{
-	  I2C_SetSlaveAddr(I2C4, 2, NCT7363Y_ADDR_2, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
-		}
-	if (fan_address_0x46_d==1)
-	{
-	  I2C_SetSlaveAddr(I2C4, 3, NCT7363Y_ADDR_3, I2C_GCMODE_DISABLE);   /* Slave Address : 0x35 */
-	}
+
+    if (fan_address_0x40_d == 1)
+        I2C_SetSlaveAddr(I2C4, 0, NCT7363Y_ADDR_0, I2C_GCMODE_DISABLE);
+
+    if (fan_address_0x42_d == 1)
+        I2C_SetSlaveAddr(I2C4, 1, NCT7363Y_ADDR_1, I2C_GCMODE_DISABLE);
+
+    if (fan_address_0x44_d == 1)
+        I2C_SetSlaveAddr(I2C4, 2, NCT7363Y_ADDR_2, I2C_GCMODE_DISABLE);
+
+    if (fan_address_0x46_d == 1)
+        I2C_SetSlaveAddr(I2C4, 3, NCT7363Y_ADDR_3, I2C_GCMODE_DISABLE);
 
     I2C_EnableInt(I2C4);
     NVIC_EnableIRQ(I2C4_IRQn);
@@ -326,6 +321,8 @@ void I2C_SlaveTRx(uint32_t u32Status)
 				     else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
+        }else {
+            I2C_SET_DATA(I2C4, 0xff); // Return 0xFF for undefined addresses
         }
 
         if (fan_reg_index < 0xFE) 
@@ -351,6 +348,8 @@ void I2C_SlaveTRx(uint32_t u32Status)
         else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
+        }else {
+            I2C_SET_DATA(I2C4, 0xff); // Return 0xFF for undefined addresses
         }
 
         if (fan_reg_index < 0xFE) 
@@ -1083,7 +1082,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x05;
-                response_buff[2] = 0x19;
+                response_buff[2] = 0x21;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
