@@ -762,8 +762,13 @@ int do_hdd_port(int count, int argc, char* argv[]) {
         // 00(0): Not Present,  10(2): NVMe Not Present -> No plugin
         const char* status_str = "false";
 
-        if (status_bits == 0x01 || status_bits == 0x03) {
-            status_str = "true";
+        if (status_bits == 0x01) 
+        {
+            status_str = "SATA Present";
+        }
+        else if (status_bits == 0x03) 
+        {
+            status_str = "NVME Present";
         }
 
         // [Step F] Add to JSON
@@ -843,8 +848,13 @@ if (ret != 0)
         // 00(0): Not Present,  10(2): NVMe Not Present -> No plugin
         const char* status_str = "false";
 
-        if (status_bits == 0x01 || status_bits == 0x03) {
-            status_str = "true";
+        if (status_bits == 0x01) 
+        {
+            status_str = "SATA Present";
+        }
+        else if (status_bits == 0x03) 
+        {
+            status_str = "NVME Present";
         }
 
         // [Step F] Add to JSON
