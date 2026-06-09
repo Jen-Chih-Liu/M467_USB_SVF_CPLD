@@ -324,7 +324,7 @@ static int I2C_WriteReg(uint8_t i2c_addr, uint8_t reg, uint8_t data)
     temp_buf[1] = data;
 
     // The project's I2C functions use a 7-bit address.
-    if (I2C_WriteMultiBytes(I2C0, i2c_addr >> 1, temp_buf, 2) == 2)
+    if (I2C_WriteMultiBytes(I2C0, i2c_addr, temp_buf, 2) == 2)
     {
         return 0; // Success
     }
@@ -335,14 +335,16 @@ static int I2C_WriteReg(uint8_t i2c_addr, uint8_t reg, uint8_t data)
 // Helper function to read a single register from an I2C device
 static int I2C_ReadReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
 {
+	
     // Set the register pointer first
-    if (I2C_WriteByte(I2C0, i2c_addr >> 1, reg) != 0)
+    if (I2C_WriteByte(I2C0, i2c_addr, reg) != 0)
     {
         return -1; // Fail to write register address
     }
 
     // Then read the data
-    *data = I2C_ReadByte(I2C0, i2c_addr >> 1);
+    *data = I2C_ReadByte(I2C0, i2c_addr );
+
     return 0; // Success
 }
 
