@@ -316,6 +316,157 @@ static const FanConfig_t *CurrentConfig = NULL;
  * 5. Virtual I2C Low-Level Functions (Replace with your actual I2C API)
  * ============================================================================== */
 
+/* --------------------------------------------------------------------------
+ * Soft (bit-bang) I2C using PB4=SDA, PB5=SCL (open-drain style)
+ * NCT7363Y read sequence:
+ *   START -> SLA+W -> RegAddr -> Repeated START -> SLA+R -> Data -> STOP
+ * -------------------------------------------------------------------------- */
+
+/* Half-period delay: ~5us -> ~100kHz */
+#define SOFT_I2C_HALF_US   5u
+
+static void soft_i2c_delay(void)
+{
+    CLK_SysTickDelay(SOFT_I2C_HALF_US);
+}
+
+/* Release SDA = switch to input (external pull-up pulls high) */
+static void soft_sda_high(void)
+{
+    GPIO_SetMode(PB, BIT4, GPIO_MODE_INPUT);
+}
+
+/* Drive SDA low */
+static void soft_sda_low(void)
+{
+    PB4 = 0;
+    GPIO_SetMode(PB, BIT4, GPIO_MODE_OUTPUT);
+}
+
+/* Release SCL = switch to input, then wait for clock stretching */
+static void soft_scl_high(void)
+{
+    GPIO_SetMode(PB, BIT5, GPIO_MODE_INPUT);
+    /* Clock stretching: wait until SCL is actually high */
+    uint32_t timeout = 10000u;
+    while (PB5 == 0 && --timeout);
+}
+
+/* Drive SCL low */
+static void soft_scl_low(void)
+{
+    PB5 = 0;
+    GPIO_SetMode(PB, BIT5, GPIO_MODE_OUTPUT);
+}
+
+static void soft_i2c_start(void)
+{
+    soft_sda_high();
+    soft_scl_high();
+    soft_i2c_delay();
+    soft_sda_low();     /* SDA falls while SCL high = START */
+    soft_i2c_delay();
+    soft_scl_low();
+    soft_i2c_delay();
+}
+
+static void soft_i2c_stop(void)
+{
+    soft_sda_low();
+    soft_i2c_delay();
+    soft_scl_high();
+    soft_i2c_delay();
+    soft_sda_high();    /* SDA rises while SCL high = STOP */
+    soft_i2c_delay();
+}
+
+/* Returns 0=ACK, 1=NACK */
+static int soft_i2c_write_byte(uint8_t byte)
+{
+    int i, ack;
+
+    for (i = 7; i >= 0; i--)
+    {
+        if ((byte >> i) & 1u)
+            soft_sda_high();
+        else
+            soft_sda_low();
+
+        soft_i2c_delay();
+        soft_scl_high();
+        soft_i2c_delay();
+        soft_scl_low();
+    }
+
+    /* Read ACK: release SDA, let slave pull low for ACK */
+    soft_sda_high();
+    soft_i2c_delay();
+    soft_scl_high();
+    soft_i2c_delay();
+    ack = PB4;          /* 0=ACK, 1=NACK */
+    soft_scl_low();
+    soft_i2c_delay();
+    return ack;
+}
+
+/* send_nack=1 sends NACK after byte (use for last byte read) */
+static uint8_t soft_i2c_read_byte(int send_nack)
+{
+    uint8_t byte = 0;
+    int i;
+
+    soft_sda_high();    /* Release SDA for slave to drive */
+
+    for (i = 7; i >= 0; i--)
+    {
+        soft_i2c_delay();
+        soft_scl_high();
+        soft_i2c_delay();
+        byte = (uint8_t)((byte << 1u) | PB4);
+        soft_scl_low();
+    }
+
+    /* Send ACK or NACK */
+    if (send_nack)
+        soft_sda_high();
+    else
+        soft_sda_low();
+
+    soft_i2c_delay();
+    soft_scl_high();
+    soft_i2c_delay();
+    soft_scl_low();
+    soft_i2c_delay();
+    soft_sda_high();    /* Release SDA */
+    return byte;
+}
+
+/**
+ * @brief Switch PB4/PB5 from hardware I2C0 to GPIO for bit-bang.
+ */
+static void soft_i2c_enter(void)
+{
+    SYS_UnlockReg();
+    /* Clear MFP to GPIO (MFP value 0x0 = GPIO on M467) */
+    SYS->GPB_MFP1 = (SYS->GPB_MFP1
+                     & ~(SYS_GPB_MFP1_PB4MFP_Msk | SYS_GPB_MFP1_PB5MFP_Msk));
+    SYS_LockReg();
+    /* Initial state: both lines high (idle) */
+    soft_sda_high();
+    soft_scl_high();
+}
+
+/**
+ * @brief Restore PB4/PB5 to hardware I2C0.
+ */
+static void soft_i2c_exit(void)
+{
+    SYS_UnlockReg();
+    SET_I2C0_SDA_PB4();
+    SET_I2C0_SCL_PB5();
+    SYS_LockReg();
+}
+
 // Helper function to write a single register to an I2C device
 static int I2C_WriteReg(uint8_t i2c_addr, uint8_t reg, uint8_t data)
 {
@@ -333,19 +484,40 @@ static int I2C_WriteReg(uint8_t i2c_addr, uint8_t reg, uint8_t data)
 }
 
 // Helper function to read a single register from an I2C device
+// Uses GPIO bit-bang on PB4(SDA)/PB5(SCL) to avoid hardware I2C Repeated START issues.
 static int I2C_ReadReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
 {
-	
-    // Set the register pointer first
-    if (I2C_WriteByte(I2C0, i2c_addr, reg) != 0)
-    {
-        return -1; // Fail to write register address
-    }
+    int ack;
+    uint8_t buf;
+    int ret = -1;
 
-    // Then read the data
-    *data = I2C_ReadByte(I2C0, i2c_addr );
+    soft_i2c_enter();
 
-    return 0; // Success
+    /* Phase 1: START + SLA+W + register address */
+    soft_i2c_start();
+    ack = soft_i2c_write_byte((uint8_t)((i2c_addr << 1u) | 0x00u));
+    if (ack != 0) { soft_i2c_stop(); goto exit; }
+
+    ack = soft_i2c_write_byte(reg);
+    if (ack != 0) { soft_i2c_stop(); goto exit; }
+
+    /* Phase 2: Repeated START + SLA+R + read 1 byte + NACK + STOP */
+    soft_i2c_start();   /* Repeated START */
+    ack = soft_i2c_write_byte((uint8_t)((i2c_addr << 1u) | 0x01u));
+    if (ack != 0) { soft_i2c_stop(); goto exit; }
+
+    buf = soft_i2c_read_byte(1);    /* NACK = last byte */
+    soft_i2c_stop();
+
+    printf("data=0x%x\n\r", buf);
+    *data = buf;
+    ret = 0;
+
+exit:
+    soft_i2c_exit();
+    if (ret != 0)
+        printf("false\n\r");
+    return ret;
 }
 
 /* ==============================================================================
@@ -585,16 +757,64 @@ extern volatile unsigned char fan_address_0x40[0xff];
 extern volatile unsigned char fan_address_0x42[0xff];
 extern volatile unsigned char fan_address_0x44[0xff];
 extern volatile unsigned char fan_address_0x46[0xff];
+
+/**
+ * @brief Check if a register address exists in the NCT7363Y register map.
+ * @details Based on NCT7363Y Datasheet V1.0. Reserved/non-existent addresses
+ *          should be skipped to avoid bus errors or undefined behaviour.
+ * @param reg Register address to check
+ * @return true if register exists, false if reserved/non-existent
+ */
+static bool Is_Register_Valid(uint8_t reg)
+{
+    /* GPIO Port 0: 0x00 ~ 0x08 */
+    if (reg <= 0x08) return true;
+
+    /* GPIO Port 1: 0x10 ~ 0x18 */
+    if (reg >= 0x10 && reg <= 0x18) return true;
+
+    /* Fan Speed Control Mode Select: 0x20 */
+    if (reg == 0x20) return true;
+
+    /* Fan Low Speed Threshold & Interrupt Status: 0x30 ~ 0x35 */
+    if (reg >= 0x30 && reg <= 0x35) return true;
+
+    /* PWM Output Enable: 0x38 ~ 0x39 */
+    if (reg >= 0x38 && reg <= 0x39) return true;
+
+    /* Fan Input Global Enable & Channel Enable: 0x40 ~ 0x42 */
+    if (reg >= 0x40 && reg <= 0x42) return true;
+
+    /* Fan Input Count Value Registers (16 ch x 2 bytes): 0x48 ~ 0x67 */
+    if (reg >= 0x48 && reg <= 0x67) return true;
+
+    /* PWM Duty Cycle & Divisor (16 ch x 2 bytes): 0x90 ~ 0xAF */
+    if (reg >= 0x90 && reg <= 0xAF) return true;
+
+    /* PWM Channel Configuration (2 ch per byte): 0xB0 ~ 0xB7 */
+    if (reg >= 0xB0 && reg <= 0xB7) return true;
+
+    /* All other addresses are reserved and do not exist */
+    return false;
+}
+
 int FanIC_BackupRegisters(void)
 {
     uint16_t reg_index;
     uint8_t data_0x40, data_0x42, data_0x44, data_0x46;
     int result = 0;
 
-    // Read all registers from both fan ICs
+    // Read all valid registers from fan ICs (skip reserved/non-existent addresses)
     for (reg_index = 0; reg_index < 0xFF; reg_index++)
     {
-      if (fan_address_0x40_d == 1)
+        /* Skip reserved addresses not defined in the NCT7363Y register map */
+        if (!Is_Register_Valid((uint8_t)reg_index))
+        {
+            continue;
+        }
+
+        printf("reg=0x%x\n\r", reg_index);
+        if (fan_address_0x40_d == 1)
         {
             // Read register from IC at address 0x40
             if (I2C_ReadReg(NCT7363Y_ADDR_0, (uint8_t)reg_index, &data_0x40) == 0)
@@ -726,10 +946,16 @@ int FanIC_CompareAndRestore(void)
         // Compare and restore registers for IC at address 0x40
         for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
+            /* Skip reserved addresses not defined in the NCT7363Y register map */
+            if (!Is_Register_Valid((uint8_t)reg_index))
+            {
+                continue;
+            }
+
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                fan_address_0x40[reg_index]=fan_address_0x40_back[reg_index];
+                fan_address_0x40[reg_index] = fan_address_0x40_back[reg_index];
                 continue;
             }
 
@@ -753,10 +979,17 @@ int FanIC_CompareAndRestore(void)
         // Compare and restore registers for IC at address 0x44
         for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
+
+            /* Skip reserved addresses not defined in the NCT7363Y register map */
+            if (!Is_Register_Valid((uint8_t)reg_index))
+            {
+                continue;
+            }
+
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                fan_address_0x42[reg_index]=fan_address_0x42_back[reg_index];
+                fan_address_0x42[reg_index] = fan_address_0x42_back[reg_index];
                 continue;
             }
 
@@ -782,10 +1015,15 @@ int FanIC_CompareAndRestore(void)
         // Compare and restore registers for IC at address 0x44
         for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
+                        /* Skip reserved addresses not defined in the NCT7363Y register map */
+            if (!Is_Register_Valid((uint8_t)reg_index))
+            {
+                continue;
+            }
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                fan_address_0x44[reg_index]=fan_address_0x44_back[reg_index];
+                fan_address_0x44[reg_index] = fan_address_0x44_back[reg_index];
                 continue;
             }
 
@@ -808,10 +1046,15 @@ int FanIC_CompareAndRestore(void)
         // Compare and restore registers for IC at address 0x46
         for (reg_index = 0; reg_index < 0xFF; reg_index++)
         {
+                        /* Skip reserved addresses not defined in the NCT7363Y register map */
+            if (!Is_Register_Valid((uint8_t)reg_index))
+            {
+                continue;
+            }
             // Skip read-only registers
             if (Is_Register_ReadOnly((uint8_t)reg_index))
             {
-                fan_address_0x46[reg_index]=fan_address_0x46_back[reg_index];
+                fan_address_0x46[reg_index] = fan_address_0x46_back[reg_index];
                 continue;
             }
 

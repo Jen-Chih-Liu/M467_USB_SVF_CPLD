@@ -47,8 +47,8 @@ static uint8_t ReadNvmeDataFromChannel(I2C_T *i2c_bus, uint8_t *pu8DataBuf, uint
     for (i = 0; i < u8NumAddrs; i++)
     {
         // Send the register offset we want to read from.
-      #if 0  
-			if (I2C_WriteByte(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG) == 0)
+#if 0
+        if (I2C_WriteByte(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG) == 0)
         {
             // Perform the read operation.
             u8DataLen = I2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], pu8DataBuf, u32ReadCnt);
@@ -59,14 +59,16 @@ static uint8_t ReadNvmeDataFromChannel(I2C_T *i2c_bus, uint8_t *pu8DataBuf, uint
                 return 1; // Success
             }
         }
-			#endif
-			
-			 u8DataLen = I2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
-       if (u8DataLen == u32ReadCnt)
-            {
-                return 1; // Success
-            }
-			
+
+#endif
+
+        u8DataLen = I2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
+
+        if (u8DataLen == u32ReadCnt)
+        {
+            return 1; // Success
+        }
+
     }
 
     return 0; // Failure: No device responded on any of the known addresses.
@@ -82,7 +84,8 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
 
     for (i = 0; i < u8NumAddrs; i++)
     {
-			#if 0
+#if 0
+
         // Send the register offset we want to read from.
         if (UI2C_WriteByte(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG) == 0)
         {
@@ -95,14 +98,16 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
                 return 1; // Success
             }
         }
-			#endif
-						 u8DataLen = UI2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
-       if (u8DataLen == u32ReadCnt)
-            {
-                return 1; // Success
-            }
-			
-			
+
+#endif
+        u8DataLen = UI2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
+
+        if (u8DataLen == u32ReadCnt)
+        {
+            return 1; // Success
+        }
+
+
     }
 
     return 0; // Failure: No device responded on any of the known addresses.

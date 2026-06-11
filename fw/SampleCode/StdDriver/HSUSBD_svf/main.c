@@ -314,26 +314,29 @@ void I2C_SlaveTRx(uint32_t u32Status)
         {
             I2C_SET_DATA(I2C4, fan_address_0x42[fan_reg_index]);
         }
-				     else if (fan_address_index == (NCT7363Y_ADDR_2))
+        else if (fan_address_index == (NCT7363Y_ADDR_2))
         {
             I2C_SET_DATA(I2C4, fan_address_0x44[fan_reg_index]);
         }
-				     else if (fan_address_index == (NCT7363Y_ADDR_3))
+        else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
-        }else {
+        }
+        else
+        {
             I2C_SET_DATA(I2C4, 0xff); // Return 0xFF for undefined addresses
         }
 
-        if (fan_reg_index < 0xFE) 
-				{
-					fan_reg_index++;
-				}
+        if (fan_reg_index < 0xFE)
+        {
+            fan_reg_index++;
+        }
+
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     }
     else if (u32Status == 0xB8)                 /* Data byte in I2CDAT has been transmitted ACK has been received */
     {
-			if (fan_address_index == (NCT7363Y_ADDR_0))
+        if (fan_address_index == (NCT7363Y_ADDR_0))
         {
             I2C_SET_DATA(I2C4, fan_address_0x40[fan_reg_index]);
         }
@@ -348,14 +351,17 @@ void I2C_SlaveTRx(uint32_t u32Status)
         else if (fan_address_index == (NCT7363Y_ADDR_3))
         {
             I2C_SET_DATA(I2C4, fan_address_0x46[fan_reg_index]);
-        }else {
+        }
+        else
+        {
             I2C_SET_DATA(I2C4, 0xff); // Return 0xFF for undefined addresses
         }
 
-        if (fan_reg_index < 0xFE) 
-				{
-					fan_reg_index++;
-				}
+        if (fan_reg_index < 0xFE)
+        {
+            fan_reg_index++;
+        }
+
         I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI_AA);
     }
     else if (u32Status == 0xC0)                 /* Data byte or last data in I2CDAT has been transmitted
@@ -374,15 +380,15 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
         if (g_u8SlvDataLen == 2) /* SMBus Write Byte: 1 command byte + 1 data byte */
         {
-          if (fan_address_index == (NCT7363Y_ADDR_0))
+            if (fan_address_index == (NCT7363Y_ADDR_0))
             {
                 fan_address_0x40[g_au8SlvData[0]] = g_au8SlvData[1];
             }
-             else if (fan_address_index == (NCT7363Y_ADDR_1))
+            else if (fan_address_index == (NCT7363Y_ADDR_1))
             {
                 fan_address_0x42[g_au8SlvData[0]] = g_au8SlvData[1];
-            } 
-					else if (fan_address_index == (NCT7363Y_ADDR_2))
+            }
+            else if (fan_address_index == (NCT7363Y_ADDR_2))
             {
                 fan_address_0x44[g_au8SlvData[0]] = g_au8SlvData[1];
             }
@@ -476,18 +482,22 @@ void NCT7363Y_SetFullSpeed(void)
     {
         if (fan_address_0x40_d == 1)
             fan_address_0x40[pwm_reg] = 0xFF; // Set new value in current array
-           // NCT7363Y_WriteReg(NCT7363Y_ADDR_0, pwm_reg, 0xFF);           
+
+        // NCT7363Y_WriteReg(NCT7363Y_ADDR_0, pwm_reg, 0xFF);
         if (fan_address_0x42_d == 1)
             fan_address_0x42[pwm_reg] = 0xFF; // Set new value in current array
-          //  NCT7363Y_WriteReg(NCT7363Y_ADDR_1, pwm_reg, 0xFF);
-          
+
+        //  NCT7363Y_WriteReg(NCT7363Y_ADDR_1, pwm_reg, 0xFF);
+
         if (fan_address_0x44_d == 1)
             fan_address_0x44[pwm_reg] = 0xFF; // Set new value in current array
-           // NCT7363Y_WriteReg(NCT7363Y_ADDR_2, pwm_reg, 0xFF);
+
+        // NCT7363Y_WriteReg(NCT7363Y_ADDR_2, pwm_reg, 0xFF);
 
         if (fan_address_0x46_d == 1)
             fan_address_0x46[pwm_reg] = 0xFF; // Set new value in current array
-         //   NCT7363Y_WriteReg(NCT7363Y_ADDR_3, pwm_reg, 0xFF);
+
+        //   NCT7363Y_WriteReg(NCT7363Y_ADDR_3, pwm_reg, 0xFF);
     }
 
     printf("[Watchdog] I2C4 idle 30s, NCT7363Y set to full speed!\n");
@@ -843,36 +853,38 @@ cpld1_init:
     NVIC_EnableIRQ(TMR0_IRQn);
     TIMER_Start(TIMER0);
 
-		
+
     PC14 = 0;
-		unsigned char data_loa=0;
-		    if (I2C_ReadReg_test(NCT7363Y_ADDR_0, 0, &data_loa) == 0)
-		{
-	  fan_address_0x40_d = 1;
-		}
-		
+    unsigned char data_loa = 0;
+
+    if (I2C_ReadReg_test(NCT7363Y_ADDR_0, 0, &data_loa) == 0)
+    {
+        fan_address_0x40_d = 1;
+    }
+
     if (I2C_ReadReg_test(NCT7363Y_ADDR_1, 0, &data_loa) == 0)
-		{
-	  fan_address_0x42_d = 1;
-		}
-		
-		  if (I2C_ReadReg_test(NCT7363Y_ADDR_2, 0, &data_loa) == 0)
-		{
-	  fan_address_0x44_d = 1;
-		}
-				  if (I2C_ReadReg_test(NCT7363Y_ADDR_3, 0, &data_loa) == 0)
-		{
-	  fan_address_0x46_d = 1;
-		}
-		
+    {
+        fan_address_0x42_d = 1;
+    }
+
+    if (I2C_ReadReg_test(NCT7363Y_ADDR_2, 0, &data_loa) == 0)
+    {
+        fan_address_0x44_d = 1;
+    }
+
+    if (I2C_ReadReg_test(NCT7363Y_ADDR_3, 0, &data_loa) == 0)
+    {
+        fan_address_0x46_d = 1;
+    }
+
     FanIC_Backup_init();
     PC14 = 1;
-     I2C4_Init();
-     s_I2C4HandlerFn = I2C_SlaveTRx;
-     I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
+    I2C4_Init();
+    s_I2C4HandlerFn = I2C_SlaveTRx;
+    I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);
     //smbus sel
-		
-		
+
+
     //9848 SMBus reset
     GPIO_SetMode(PB, BIT6, GPIO_MODE_OUTPUT);
     EADC_Open(EADC0, EADC_CTL_DIFFEN_SINGLE_END);
@@ -1082,7 +1094,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x06;
-                response_buff[2] = 0x09;
+                response_buff[2] = 0x11;
                 response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.

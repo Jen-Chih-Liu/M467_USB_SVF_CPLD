@@ -1202,10 +1202,12 @@ uint8_t I2C_ReadByteOneReg(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t u8DataAddr)
 
     if (u32rxLen == 1u)
     {
+			  printf("data=0x%x\n\r", data);
         return data;
     }
     else
     {
+			 printf("false\n\r");
         return 0;   /* Read data fail */
     }
 }
@@ -1256,6 +1258,7 @@ uint32_t I2C_ReadMultiBytesOneReg(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t u8Dat
 
         case 0x18u:                                                     /* Slave Address ACK */
             I2C_SET_DATA(i2c, u8DataAddr);                              /* Write Lo byte address of register */
+				    u8Ctrl = I2C_CTL_SI;        
             break;
 
         case 0x20u:                                                     /* Slave Address NACK */

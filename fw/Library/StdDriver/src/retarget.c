@@ -555,6 +555,7 @@ char GetChar(void)
             if((nRet = SH_ReadC()) != 0)
                 return nRet;
         }
+			}
 # endif
 
 # if (DEBUG_ENABLE_SEMIHOST == 2) // Re-direct to UART Debug Port only when DEBUG_ENABLE_SEMIHOST=2
