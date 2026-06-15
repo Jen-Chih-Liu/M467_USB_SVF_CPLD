@@ -1202,12 +1202,12 @@ uint8_t I2C_ReadByteOneReg(I2C_T *i2c, uint8_t u8SlaveAddr, uint8_t u8DataAddr)
 
     if (u32rxLen == 1u)
     {
-			  printf("data=0x%x\n\r", data);
+			  //printf("data=0x%x\n\r", data);
         return data;
     }
     else
     {
-			 printf("false\n\r");
+			// printf("false\n\r");
         return 0;   /* Read data fail */
     }
 }

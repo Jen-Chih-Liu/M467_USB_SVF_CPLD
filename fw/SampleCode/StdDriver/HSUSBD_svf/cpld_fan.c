@@ -919,7 +919,7 @@ static bool Is_Register_ReadOnly(uint8_t reg)
 
     // FANIN Count Value Registers (High and Low bytes for all channels)
     // 48h, 49h (FANIN0); 4Ah, 4Bh (FANIN1); ... 66h, 67h (FANIN15)
-    if ((reg >= 0x48 && reg <= 0x67) && ((reg & 0x01) == 0 || (reg & 0x01) == 1))
+    if ((reg >= 0x48 && reg <= 0x67))
     {
         // This covers 48h-67h range (FANIN0-FANIN15 count values)
         return true;
