@@ -228,7 +228,7 @@ void I2C4_Init(void)
     I2C_Open(I2C4, 100000);
 
     /* Get I2C0 Bus Clock */
-    printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
+   // printf("I2C clock %d Hz\n", I2C_GetBusClockFreq(I2C4));
 
 
     if (fan_address_0x40_d == 1)
@@ -938,6 +938,36 @@ cpld1_init:
             timer0_count = 0;
         }
 
+        /* Enable I2C4 interrupt when PC14 == 0, disable when PC14 == 1 */
+        {
+            static uint8_t pc14_last = 0xFF; /* 0xFF = invalid, forces first update */
+            uint8_t pc14_cur = (uint8_t)PC14;
+
+            if (pc14_cur != pc14_last)
+            {
+                if (pc14_cur == 0)
+                {
+									    SET_I2C4_SDA_PF4();
+                      SET_I2C4_SCL_PF5();
+    I2C4_Init();
+    s_I2C4HandlerFn = I2C_SlaveTRx;
+    I2C_SET_CONTROL_REG(I2C4, I2C_CTL_SI | I2C_CTL_AA);                   
+                }
+                else
+                {
+                    NVIC_DisableIRQ(I2C4_IRQn);
+                    I2C_DisableInt(I2C4);
+									I2C_Close(I2C4);
+									    SET_GPIO_PF4();
+                      SET_GPIO_PF5();
+									    GPIO_SetMode(PF, BIT4, GPIO_MODE_INPUT);
+									GPIO_SetMode(PF, BIT5, GPIO_MODE_INPUT);
+                }
+
+                pc14_last = pc14_cur;
+            }
+        }
+
         /* I2C4 watchdog: if no packet received for 30 seconds and PC14 == 0,
          * force all NCT7363Y fan ICs to full speed as a safety measure. */
         if (i2c4_idle_timer >= 30000 && PC14 == 0)
@@ -1094,8 +1124,8 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x06;
-                response_buff[2] = 0x11;
-                response_buff[3] = 0x02;
+                response_buff[2] = 0x12;
+                response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
                 for (i = 0; i < 1024; i++)
