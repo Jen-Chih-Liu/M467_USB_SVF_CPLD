@@ -1437,6 +1437,43 @@ int pass_i2c_get(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, un
 }
 
 
+int pass_i2c_get1(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, unsigned char i2c_addr,unsigned char i2c_reg, unsigned char i2c_len, unsigned char* pi2c_array) {
+    char cmd_i2c_get[PACKET_SIZE] = { 0 };
+    cmd_i2c_get[0] = (char)0xd4; 
+    cmd_i2c_get[1] = 1;          // Channel 1
+    cmd_i2c_get[2] = i2c_addr;   // Custom slave address
+    cmd_i2c_get[3] = 1;          // Read
+    cmd_i2c_get[4] = i2c_len;
+    cmd_i2c_get[5] = i2c_reg;
+    int actual_length = 0;
+    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_i2c_get, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    if (r < 0) {
+        fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
+        return -1; 
+    }
+
+
+    // Prepare response buffer
+    unsigned char in_data[transfer_size] = { 0 };
+    actual_length = 0;
+
+    int r_in = libusb_interrupt_transfer(handle, ep_in, in_data, sizeof(in_data), &actual_length, 1000); 
+
+    if (r_in != 0) {
+        fprintf(stderr, "Error reading from device: %s\n", libusb_error_name(r_in));
+        return -1; 
+    }
+
+    if (actual_length < 4) {
+        fprintf(stderr, "Response too short\n");
+        return -1; 
+    }
+    for (int i = 0; i < i2c_len; i++)
+        pi2c_array[i] = in_data[3 + i];
+
+    return 0; 
+}
+
 /**
  * @brief Reads global LED status via an 0xB3 command.
  */
@@ -1522,6 +1559,47 @@ int usbd_multi_pass_i2c_get(unsigned char usb_cnt, unsigned char i2c_addr, unsig
 
 
 
+int usbd_multi_pass_i2c_get1(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_len, unsigned char* i2c_array)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0)
+        return 1;
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            r = pass_i2c_get1(handle, ep_out, ep_in, i2c_addr,i2c_reg, i2c_len, i2c_array);
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
+
 /**
  * @brief Global LED Status logical wrapper.
  */
@@ -1587,6 +1665,24 @@ int pass_i2c_set(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,uns
 }
 
 
+int pass_i2c_set1(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,unsigned char i2c_adddr, unsigned char i2c_reg, unsigned char i2c_data) {
+    // Prepare and send the command
+    char cmd_i2c_set[PACKET_SIZE] = { 0 };
+    cmd_i2c_set[0] = (char)0xd0; 
+    cmd_i2c_set[1] = 1;          // Channel 0
+    cmd_i2c_set[2] = i2c_adddr;
+    cmd_i2c_set[3] = 0x02;       // Operation: Write
+    cmd_i2c_set[4] = i2c_reg;
+    cmd_i2c_set[5] = i2c_data;
+    int actual_length;
+    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_i2c_set, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    if (r < 0) {
+        fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
+        return -1; 
+    }
+    return 0; 
+}
+
 /**
  * @brief General bypass I2C Write logical wrapper.
  */
@@ -1629,6 +1725,45 @@ int usbd_multi_pass_i2c_set(unsigned char usb_cnt, unsigned char i2c_addr, unsig
     return (r == 0) ? 0 : 1;
 }
 
+
+int usbd_multi_pass_i2c_set1(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_data)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1; 
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1; 
+    }
+
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0)
+        return 1;
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            r = pass_i2c_set1(handle, ep_out, ep_in, i2c_addr, i2c_reg, i2c_data);
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
 
 
 /**

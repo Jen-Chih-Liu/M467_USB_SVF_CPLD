@@ -837,7 +837,7 @@ if (ret != 0)
 
         // [Step C] Get the Byte (corresponding to cpld_reg_40_4f in struct)
         // Ensure i/4 doesn't exceed array bounds (0-15)
-        uint8_t raw_byte = boardInfo.cpld_reg_40_4f[reg_index];
+        uint8_t raw_byte = boardInfo1.cpld_reg_40_4f[reg_index];
 
         // [Step D] Extract 2 bits status
         // Shift right, then mask with 0x03 (binary 11) to get last two bits
@@ -1648,7 +1648,8 @@ int handle_version(int count, int argc, char* argv[]) {
         // Prepare a buffer to store the converted string
         char version_str_buf[16];
 
-        snprintf(version_str_buf, sizeof(version_str_buf), "0x%08x", mcu_version);
+        //snprintf(version_str_buf, sizeof(version_str_buf), "0x%08x", mcu_version);
+        snprintf(version_str_buf, sizeof(version_str_buf), "0x%06x", mcu_version>>8);
 
         // --- cJSON Generation ---
         cJSON* root = cJSON_CreateObject();
@@ -2110,6 +2111,137 @@ int handle_i2c_bypass(int count, int argc, char* argv[]) {
         unsigned int write_val = strtoul(argv[4], NULL, 16);
         int is_success;
         if (usbd_multi_pass_i2c_set((unsigned char)count, i2c_addr, reg_addr, write_val) == 0) {
+            // 3. Execute write
+            is_success = 1;
+        }
+        else
+        {
+            is_success = 0;
+        }
+        // 4. Prepare JSON
+        cJSON* root = cJSON_CreateObject();
+
+        // 5. Dynamically generate Key
+        char key_buf[64];
+        snprintf(key_buf, sizeof(key_buf), "I2C_Set_0x%x", reg_addr);
+
+        // 6. Fill in result
+        if (is_success) {
+            cJSON_AddStringToObject(root, key_buf, "Success");
+        }
+        else {
+            cJSON_AddStringToObject(root, key_buf, "fail");
+        }
+
+        // 7. Print and release
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+
+    }
+    else {
+        dbg_printf("[Error] Unknown CPLD sub-command: %s\n", subCmd);
+        return -1;
+    }
+    return 0;
+}
+
+
+int handle_i2c_bypass1(int count, int argc, char* argv[]) {
+    // M463 <Count> I2CBYPASS <Cmd>
+    cmd_printf("[CMD] Count=%d, Action=I2C Bypass Mode\n", count);
+
+    if (argc < 2) {
+        dbg_printf("[Error] CPLD command needs sub-command (Id, Version, Get, Set)\n");
+        return -1;
+    }
+
+    const char* subCmd = argv[1];
+    
+    if (STR_EQUAL(subCmd, "Get")) {
+        cmd_printf("[CMD] Count=%d, Action=i2c Get value\n", count);
+        // 2. Parse Reg and Len
+        unsigned int i2c_addr = strtoul(argv[2], NULL, 16);
+        unsigned int reg_addr = strtoul(argv[3], NULL, 16);
+        int length = atoi(argv[4]);
+
+        if (length <= 0) {
+            dbg_printf("[Error] Length must be > 0\n");
+            return -1;
+        }
+
+        unsigned char pi2c_buf[32] = { 0 };
+        if (usbd_multi_pass_i2c_get1((unsigned char)count, i2c_addr,reg_addr, length, &pi2c_buf[0]) == 0)
+        {
+            // 3. Prepare JSON objects
+            cJSON* root = cJSON_CreateObject();      
+            cJSON* data_obj = cJSON_CreateObject();  
+
+            // 4. Fill JSON with data
+            char key_buf[32];   
+            char val_buf[32];   
+
+            for (int i = 0; i < length; i++) {
+                // Generate Key
+                snprintf(key_buf, sizeof(key_buf), "data%d", i + 1);
+
+                // Generate Value
+                snprintf(val_buf, sizeof(val_buf), "0x%02x", pi2c_buf[i]);
+
+                // Add to inner object
+                cJSON_AddStringToObject(data_obj, key_buf, val_buf);
+            }
+
+            // 5. Generate outer Key
+            char root_key_buf[32];
+            snprintf(root_key_buf, sizeof(root_key_buf), "Get_0x%x", reg_addr);
+
+            // 6. Mount inner object to outer layer
+            cJSON_AddItemToObject(root, root_key_buf, data_obj);
+
+            // 7. Print and release
+            char* out = cJSON_Print(root);
+            json_printf("%s\n", out);
+
+            free(out);
+            cJSON_Delete(root); 
+        }
+        else {
+            cJSON* root = cJSON_CreateObject();
+
+            // 5. Dynamically generate Key
+            char key_buf[64];
+            snprintf(key_buf, sizeof(key_buf), "I2C_PASS_GET_0x%x", reg_addr);
+
+            cJSON_AddStringToObject(root, key_buf, "fail");
+
+            // 7. Print and release
+            char* out = cJSON_Print(root);
+            json_printf("%s\n", out);
+
+            free(out);
+            cJSON_Delete(root);
+
+        }
+    }
+    else if (STR_EQUAL(subCmd, "Set")) {
+        // Possible subsequent parameters: M463 <cnt> i2c Set <Reg> <Val>
+        cmd_printf("[CMD] Count=%d, Action=CPLD Set value\n", count);
+
+        // 1. Check argument count
+        if (argc < 4) {
+            dbg_printf("[Error] Usage: CPLD Set <Reg> <Data>\n");
+            return -1;
+        }
+
+        // 2. Parse input parameters (Reg and Data)
+        unsigned int i2c_addr = strtoul(argv[2], NULL, 16);
+        unsigned int reg_addr = strtoul(argv[3], NULL, 16);
+        unsigned int write_val = strtoul(argv[4], NULL, 16);
+        int is_success;
+        if (usbd_multi_pass_i2c_set1((unsigned char)count, i2c_addr, reg_addr, write_val) == 0) {
             // 3. Execute write
             is_success = 1;
         }
@@ -2890,7 +3022,8 @@ cmd_entry_t cmd_table[] = {
     {"Version",   handle_version,    "Version <MCU>"},
     {"BPB",       handle_bpb,        "BPB Sensor Get"},
     {"Reset",     handle_reset,      "Reset system"},
-    {"I2CBYPASS", handle_i2c_bypass, "I2C Bypass <Cmd>"},
+    {"I2CBYPASS", handle_i2c_bypass, "I2C0 Bypass <Cmd>"},
+    {"I2CBYPASS1", handle_i2c_bypass1, "I2C2 Bypass <Cmd>"},
     
     // [NEW] Added FAN command
     {"FAN",       handle_fan,        "FAN RPM / Duty <Get/Set>"},

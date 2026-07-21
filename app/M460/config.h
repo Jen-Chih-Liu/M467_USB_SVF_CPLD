@@ -91,6 +91,8 @@ extern int usbd_multi_cpld_i2c_get(unsigned char usb_cnt, unsigned char i2c_reg,
 extern int usbd_multi_cpld_i2c_set(unsigned char usb_cnt, unsigned char i2c_reg, unsigned char i2c_data);
 extern int usbd_multi_pass_i2c_get(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_len, unsigned char* i2c_array);
 extern int usbd_multi_pass_i2c_set(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_data);
+extern int usbd_multi_pass_i2c_get1(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_len, unsigned char* i2c_array);
+extern int usbd_multi_pass_i2c_set1(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_data);
 extern int usbd_multi_mcu_jumper_ldrom(unsigned char usb_cnt);
 extern int usb_multi_mcu_reset_set_var(unsigned char usb_cnt, unsigned char reset_var);
 extern int usb_multi_mcu_reset_get_var(unsigned char usb_cnt, unsigned char* pReset_var);
