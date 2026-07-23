@@ -1074,15 +1074,15 @@ if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
             uint8_t status_val = (raw_byte >> bit_shift) & 0x03;
 
             // [Step E] Add to JSON
-            snprintf(key_buf, sizeof(key_buf), "NVME%d", i + 1);
+            snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
 
             // Use status_val (0~3) as index for lookup
             cJSON_AddStringToObject(root1, key_buf1, status_map[status_val]);
         }
         else {
             // [Step E] Add to JSON
-            snprintf(key_buf, sizeof(key_buf), "NVME%d", i + 1);
-            cJSON_AddStringToObject(root1, key_buf, "NA");
+            snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+            cJSON_AddStringToObject(root1, key_buf1, "NA");
         }
     }
 
