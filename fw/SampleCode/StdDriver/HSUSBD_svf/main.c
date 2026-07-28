@@ -1124,7 +1124,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x07;
-                response_buff[2] = 0x21;
+                response_buff[2] = 0x28;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
@@ -1396,14 +1396,18 @@ cpld1_init:
             {
                 if (usb_rcvbuf[1] == 0)
                 {
-                    i2c_write_bytes = I2C_WriteMultiBytes(I2C0, usb_rcvbuf[2] >> 1, &usb_rcvbuf[5], usb_rcvbuf[3]);
-                    i2c_read_bytes = I2C_ReadMultiBytes(I2C0, usb_rcvbuf[2] >> 1, i2c_read_report, usb_rcvbuf[4]);
+									i2c_write_bytes = I2C_WriteMultiBytes(I2C0, usb_rcvbuf[2] >> 1, &usb_rcvbuf[5], usb_rcvbuf[3]);
+                   i2c_read_bytes = I2C_ReadMultiBytes(I2C0, usb_rcvbuf[2] >> 1, i2c_read_report, usb_rcvbuf[4]);
+                   // i2c_read_bytes = SoftI2C_ReadMultiBytesOneReg(usb_rcvbuf[2] >> 1, usb_rcvbuf[5], i2c_read_report, usb_rcvbuf[4]);
+                    //i2c_write_bytes = 1;
                 }
 
                 if (usb_rcvbuf[1] == 1)
                 {
-                    i2c_write_bytes = I2C_WriteMultiBytes(I2C2, usb_rcvbuf[2] >> 1, &usb_rcvbuf[5], usb_rcvbuf[3]);
-                    i2c_read_bytes = I2C_ReadMultiBytes(I2C2, usb_rcvbuf[2] >> 1, i2c_read_report, usb_rcvbuf[4]);
+									i2c_write_bytes = I2C_WriteMultiBytes(I2C0, usb_rcvbuf[2] >> 1, &usb_rcvbuf[5], usb_rcvbuf[3]);
+                   i2c_read_bytes = I2C_ReadMultiBytes(I2C0, usb_rcvbuf[2] >> 1, i2c_read_report, usb_rcvbuf[4]);
+                    //i2c_read_bytes = SoftI2C2_ReadMultiBytesOneReg(usb_rcvbuf[2] >> 1, usb_rcvbuf[5], i2c_read_report, usb_rcvbuf[4]);
+                    //i2c_write_bytes = 1;
                 }
 
                 // Prepare a response with write/read status and the data read.
