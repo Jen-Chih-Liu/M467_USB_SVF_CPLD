@@ -79,14 +79,6 @@ typedef struct {
     uint8_t nvme_slot_13[NVME_INFO_LEN]; // 0x2A0 - 0x2BF
     uint8_t nvme_slot_14[NVME_INFO_LEN]; // 0x2C0 - 0x2DF
     uint8_t nvme_slot_15[NVME_INFO_LEN]; // 0x2E0 - 0x2FF
-    uint8_t nvme_slot_16[NVME_INFO_LEN]; // 0x300 - 0x31F
-    uint8_t nvme_slot_17[NVME_INFO_LEN]; // 0x320 - 0x33F
-    uint8_t nvme_slot_18[NVME_INFO_LEN]; // 0x340 - 0x35F
-    uint8_t nvme_slot_19[NVME_INFO_LEN]; // 0x360 - 0x37F
-    uint8_t nvme_slot_20[NVME_INFO_LEN]; // 0x380 - 0x39F
-    uint8_t nvme_slot_21[NVME_INFO_LEN]; // 0x3A0 - 0x3BF
-    uint8_t nvme_slot_22[NVME_INFO_LEN]; // 0x3C0 - 0x3DF
-    uint8_t nvme_slot_23[NVME_INFO_LEN]; // 0x3E0 - 0x3FF
 
 } M463_BoardData_t;
 

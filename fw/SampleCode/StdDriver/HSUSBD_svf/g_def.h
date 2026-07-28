@@ -41,10 +41,9 @@
 
 
 //#define i2c_mux_cnt 6
-#define NVME_TP0_ADDR (0xd4>>1)
-#define NVME_TP1_ADDR (0x56>>1)
-#define NVME_TP2_ADDR (0x90>>1)
-#define NVME_TP3_ADDR (0x36>>1)
+#define NVME_TP1_ADDR 0xd4>>1
+#define NVME_TP2_ADDR 0x56>>1
+#define NVME_TP3_ADDR 0x90>>1
 #define NVME_MEM_OFFSET 0x100
 #define NVME_READ_REG 0x0
 #define NVME_READ_COUNT 32
@@ -73,14 +72,6 @@
 #define nvme_slot_13 0x2a0
 #define nvme_slot_14 0x2c0
 #define nvme_slot_15 0x2e0
-#define nvme_slot_16 0x300
-#define nvme_slot_17 0x320
-#define nvme_slot_18 0x340
-#define nvme_slot_19 0x360
-#define nvme_slot_20 0x380
-#define nvme_slot_21 0x3a0
-#define nvme_slot_22 0x3c0
-#define nvme_slot_23 0x3e0
 
 extern volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) ;
 extern volatile uint8_t bmc_report1[1024] __attribute__((aligned(4))) ;
@@ -100,8 +91,6 @@ extern void show_cpld_information(uint8_t *p_buf);
 extern void print_nvme_basic_management_info(uint8_t *data);
 extern int FanIC_Backup_init(void);
 extern int FanIC_CompareAndRestore(void);
-extern uint32_t SoftI2C_ReadMultiBytesOneReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data, uint32_t u32Len);
-extern uint32_t SoftI2C2_ReadMultiBytesOneReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data, uint32_t u32Len);
 extern void EEPROM_WriteData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len);
 extern void EEPROM_WriteData_1(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len);
 extern void EEPROM_ReadData(uint8_t u8DataAddr, uint8_t *pu8Data, uint32_t u32Len);

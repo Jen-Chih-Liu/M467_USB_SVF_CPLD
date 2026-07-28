@@ -535,14 +535,6 @@ int do_hdd_info(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_13,
         boardInfo.nvme_slot_14,
         boardInfo.nvme_slot_15,
-        boardInfo.nvme_slot_16,
-        boardInfo.nvme_slot_17,
-        boardInfo.nvme_slot_18,
-        boardInfo.nvme_slot_19,
-        boardInfo.nvme_slot_20,
-        boardInfo.nvme_slot_21,
-        boardInfo.nvme_slot_22,
-        boardInfo.nvme_slot_23,
     };
 
     char key_buf[16];
@@ -626,14 +618,6 @@ if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
         boardInfo1.nvme_slot_13,
         boardInfo1.nvme_slot_14,
         boardInfo1.nvme_slot_15,
-        boardInfo1.nvme_slot_16,
-        boardInfo1.nvme_slot_17,
-        boardInfo1.nvme_slot_18,
-        boardInfo1.nvme_slot_19,
-        boardInfo1.nvme_slot_20,
-        boardInfo1.nvme_slot_21,
-        boardInfo1.nvme_slot_22,
-        boardInfo1.nvme_slot_23,
     };
 
     char key_buf1[16];
@@ -747,20 +731,11 @@ int do_hdd_port(int count, int argc, char* argv[]) {
         return -1;
     }
     cmd_printf("[CMD] Count=%d, Action=HDD PORT Status\n", count);
-
-    // Read the second CPLD up front so both counts can be combined into one JSON
-    M463_BoardData_t boardInfo1;
-    memset(&boardInfo1, 0, sizeof(boardInfo1));
-    int ret1 = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
-    int cpld1_valid = (ret1 == 0) &&
-                      (boardInfo1.cpld_version != 0x0) &&
-                      (boardInfo1.cpld_version != 0xff);
-
+    
     cJSON* root = cJSON_CreateObject();
-    // Use the read hard drive count (first CPLD + second CPLD combined)
+    // Use the read hard drive count
     int hdd_amount = boardInfo.hdd_amount;
-    int hdd_amount1 = cpld1_valid ? boardInfo1.hdd_amount : 0;
-    cJSON_AddNumberToObject(root, "NVMECount", hdd_amount + hdd_amount1);
+    cJSON_AddNumberToObject(root, "NVMECount", hdd_amount);
 
     char key_buf[16];
 
@@ -801,7 +776,55 @@ int do_hdd_port(int count, int argc, char* argv[]) {
         cJSON_AddStringToObject(root, key_buf, status_str);
     }
 
-    // Second CPLD drives continue in the SAME JSON object, numbered from 15
+    char* out = cJSON_Print(root);
+    json_printf("%s\n", out);
+    free(out);
+    cJSON_Delete(root);
+
+
+
+M463_BoardData_t boardInfo1;
+    memset(&boardInfo1, 0, sizeof(boardInfo1)); // Initialize to zero
+     ret = usb_read_multi_bmc_cpld1((unsigned char)count, &boardInfo1);
+if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
+        {
+            return 0;
+        }
+if (ret != 0)
+    {
+        // Prepare JSON
+        cJSON* root = cJSON_CreateObject();
+
+        char key_buf[64];
+        snprintf(key_buf, sizeof(key_buf), "HDD PORT STATUS");
+
+        // Fill in result (Success/fail)
+        cJSON_AddStringToObject(root, key_buf, "fail, no supports port");
+
+
+        // Print and release
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+
+    if (argc < 2 || !STR_EQUAL(argv[1], "Status")) {
+        dbg_printf("[Error] Usage: HDD Port Status\n");
+        return -1;
+    }
+    cmd_printf("[CMD] Count=%d, Action=HDD PORT Status\n", count);
+    
+    cJSON* root1 = cJSON_CreateObject();
+    // Use the read hard drive count
+    int hdd_amount1 = boardInfo1.hdd_amount;
+    cJSON_AddNumberToObject(root1, "NVMECount1", hdd_amount1);
+
+    char key_buf1[16];
+
     // 4. Parse register status (Core logic)
     for (int i = 0; i < hdd_amount1; i++) {
         // [Step A] Calculate corresponding Byte Index
@@ -834,15 +857,15 @@ int do_hdd_port(int count, int argc, char* argv[]) {
             status_str = "NVME Present";
         }
 
-        // [Step F] Add to JSON (second CPLD numbering starts at 15)
-        snprintf(key_buf, sizeof(key_buf), "NVME%d", i + 15);
-        cJSON_AddStringToObject(root, key_buf, status_str);
+        // [Step F] Add to JSON
+        snprintf(key_buf1, sizeof(key_buf1), "NVME%d", i + 1);
+        cJSON_AddStringToObject(root1, key_buf1, status_str);
     }
 
-    char* out = cJSON_Print(root);
-    json_printf("%s\n", out);
-    free(out);
-    cJSON_Delete(root);
+    char* out1 = cJSON_Print(root1);
+    json_printf("%s\n", out1);
+    free(out1);
+    cJSON_Delete(root1);
     return 0;
 }
 

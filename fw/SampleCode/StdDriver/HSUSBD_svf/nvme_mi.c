@@ -8,7 +8,6 @@ extern volatile unsigned char mux_TCA9548_flag ;
 // This makes it easy to add or remove addresses for different hardware models.
 static const uint8_t s_au8NvmeMiAddr[] =
 {
-    NVME_TP0_ADDR,
     NVME_TP1_ADDR,
     NVME_TP2_ADDR,
     NVME_TP3_ADDR,
@@ -26,8 +25,6 @@ const uint8_t s_au8_PCA9848_Addr[] =
 {
     (0xB2 >> 1), // MUX 1 Address
     (0xB4 >> 1), // MUX 2 Address
-    (0xB6 >> 1), // MUX 3 Address
-
 };
 
 /**
@@ -65,87 +62,11 @@ static uint8_t ReadNvmeDataFromChannel(I2C_T *i2c_bus, uint8_t *pu8DataBuf, uint
 
 #endif
 
-        if (s_au8NvmeMiAddr[i] == NVME_TP0_ADDR)
+        u8DataLen = I2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
+
+        if (u8DataLen == u32ReadCnt)
         {
-            // NVME_TP0_ADDR (0xd4>>1) supports the full NVMe-MI Basic
-            // Management Command: read the complete data structure.
-            u8DataLen = I2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
-
-            if (u8DataLen == u32ReadCnt)
-            {
-                return 1; // Success
-            }
-        }
-        else if (s_au8NvmeMiAddr[i] == NVME_TP3_ADDR)
-        {
-            // NVME_TP3_ADDR (0x36>>1) exposes its temperature at registers
-            // 0x05/0x06 as a 13-bit two's complement value with 0.0625 C/LSB.
-            // Convert it to signed 1 C/LSB for the NVMe CTemp byte.
-            uint8_t au8Reg[2];
-            uint8_t u8RegPtr = REG_TEMP_DATA; // 0x05
-
-            // Manually set the register pointer with I2C_WriteMultiBytes,
-            // then read the two temperature bytes with I2C_ReadMultiBytes.
-            I2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (I2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
-            {
-                int16_t i16Raw = (int16_t)(((au8Reg[0] << 8) | au8Reg[1]) & 0x1FFF);
-
-                // Sign-extend the 13-bit value (bit12 is the sign bit).
-                if (i16Raw & 0x1000)
-                    i16Raw |= 0xE000;
-
-                // 0.0625 C/LSB -> 1 C/LSB (>> 4), keeping the sign.
-                int8_t i8Temp = (int8_t)(i16Raw >> 4);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = (uint8_t)i8Temp;   // Composite temperature (signed, 1 C/LSB)
-                return 1; // Success
-            }
-        }
-        else
-        {
-            // NVME_TP1_ADDR/NVME_TP2_ADDR only expose a temperature
-            // sensor: read register 0 and register 1 and derive the composite
-            // temperature = ((reg0 << 8) | (reg1 & 0x7ff)) >> 4.
-            uint8_t au8Reg[2];
-            uint8_t u8RegPtr = NVME_READ_REG;
-
-            // Test method: manually set the register pointer with I2C_WriteMultiBytes,
-            // then read the two temperature bytes with I2C_ReadMultiBytes.
-            I2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (I2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
-            {
-                uint8_t u8Temp = (uint8_t)((((au8Reg[0] << 8) | (au8Reg[1] & 0x7ff)) >> 4) & 0xff);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = u8Temp;   // Composite temperature
-                return 1; // Success
-            }
-
-#if 0
-
-            if (I2C_ReadMultiBytesOneReg(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG, au8Reg, 2) == 2)
-            {
-                uint8_t u8Temp = (uint8_t)((((au8Reg[0] << 8) | (au8Reg[1] & 0x7ff)) >> 4) & 0xff);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = u8Temp;   // Composite temperature
-                return 1; // Success
-            }
-
-#endif
+            return 1; // Success
         }
 
     }
@@ -179,88 +100,11 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
         }
 
 #endif
+        u8DataLen = UI2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
 
-        if (s_au8NvmeMiAddr[i] == NVME_TP0_ADDR)
+        if (u8DataLen == u32ReadCnt)
         {
-            // NVME_TP0_ADDR (0xd4>>1) supports the full NVMe-MI Basic
-            // Management Command: read the complete data structure.
-            u8DataLen = UI2C_ReadMultiBytesTwoRegs(i2c_bus, s_au8NvmeMiAddr[i], 0x00, pu8DataBuf, u32ReadCnt);
-
-            if (u8DataLen == u32ReadCnt)
-            {
-                return 1; // Success
-            }
-        }
-        else if (s_au8NvmeMiAddr[i] == NVME_TP3_ADDR)
-        {
-            // NVME_TP3_ADDR (0x36>>1) exposes its temperature at registers
-            // 0x05/0x06 as a 13-bit two's complement value with 0.0625 C/LSB.
-            // Convert it to signed 1 C/LSB for the NVMe CTemp byte.
-            uint8_t au8Reg[2];
-            uint8_t u8RegPtr = REG_TEMP_DATA; // 0x05
-
-            // Manually set the register pointer with UI2C_WriteMultiBytes,
-            // then read the two temperature bytes with UI2C_ReadMultiBytes.
-            UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
-            {
-                int16_t i16Raw = (int16_t)(((au8Reg[0] << 8) | au8Reg[1]) & 0x1FFF);
-
-                // Sign-extend the 13-bit value (bit12 is the sign bit).
-                if (i16Raw & 0x1000)
-                    i16Raw |= 0xE000;
-
-                // 0.0625 C/LSB -> 1 C/LSB (>> 4), keeping the sign.
-                int8_t i8Temp = (int8_t)(i16Raw >> 4);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = (uint8_t)i8Temp;   // Composite temperature (signed, 1 C/LSB)
-                return 1; // Success
-            }
-        }
-        else
-        {
-            // NVME_TP1_ADDR/NVME_TP2_ADDR only expose a temperature
-            // sensor: read register 0 and register 1 and derive the composite
-            // temperature = ((reg0 << 8) | (reg1 & 0x7ff)) >> 4.
-            uint8_t au8Reg[2];
-            uint8_t u8RegPtr = NVME_READ_REG;
-
-            // Test method: manually set the register pointer with UI2C_WriteMultiBytes,
-            // then read the two temperature bytes with UI2C_ReadMultiBytes.
-            UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
-            {
-                uint8_t u8Temp = (uint8_t)((((au8Reg[0] << 8) | (au8Reg[1] & 0x7ff)) >> 4) & 0xff);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = u8Temp;   // Composite temperature
-                return 1; // Success
-            }
-
-#if 0
-
-            if (UI2C_ReadMultiBytesOneReg(i2c_bus, s_au8NvmeMiAddr[i], NVME_READ_REG, au8Reg, 2) == 2)
-            {
-                uint8_t u8Temp = (uint8_t)((((au8Reg[0] << 8) | (au8Reg[1] & 0x7ff)) >> 4) & 0xff);
-
-                // Build a minimal Basic Management structure so downstream parsing
-                // (print_nvme_basic_management_info) still reports the temperature.
-                memset(pu8DataBuf, 0, u32ReadCnt);
-                pu8DataBuf[0] = 6;        // Status length
-                pu8DataBuf[3] = u8Temp;   // Composite temperature
-                return 1; // Success
-            }
-
-#endif
+            return 1; // Success
         }
 
 
@@ -323,7 +167,7 @@ void nvm_mi_read(void)
     if (bmc_report[cpld_hdd_amount] == 0xff)
         return;
 
-    if (bmc_report[cpld_hdd_amount] > 23)
+    if (bmc_report[cpld_hdd_amount] > 15)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
@@ -351,13 +195,8 @@ void nvm_mi_read(void)
 
         if (mux_TCA9548_flag == 0)
         {
-            // Reset every PCA9848 MUX to channel 0 so no stale channel from a
-            // previous MUX stays enabled (important once more than one MUX is used).
-            uint8_t u8ResetIdx;
-            for (u8ResetIdx = 0; u8ResetIdx < u8MuxCount; u8ResetIdx++)
-            {
-                SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8ResetIdx], 0);
-            }
+            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 0);
+            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[1], 0);
 
             // Select the I2C channel for the current NVMe slot.
             if (!SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
@@ -416,7 +255,7 @@ void nvm_mi_read_1(void)
     if (bmc_report1[cpld_hdd_amount] == 0xff)
         return;
 
-    if (bmc_report1[cpld_hdd_amount] > 23)
+    if (bmc_report1[cpld_hdd_amount] > 15)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
@@ -443,13 +282,8 @@ void nvm_mi_read_1(void)
 
         if (mux_TCA9548_flag == 0)
         {
-            // Reset every PCA9848 MUX to channel 0 so no stale channel from a
-            // previous MUX stays enabled (important once more than one MUX is used).
-            uint8_t u8ResetIdx;
-            for (u8ResetIdx = 0; u8ResetIdx < u8MuxCount; u8ResetIdx++)
-            {
-                SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8ResetIdx], 0);
-            }
+            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[0], 0);
+            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[1], 0);
 
             // Select the I2C channel for the current NVMe slot.
             if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
