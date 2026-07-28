@@ -824,8 +824,8 @@ cpld1_init:
     // Loop through all detected NVMe drives and print their information.
     for (nvme_i = 0; nvme_i < bmc_report[cpld_hdd_amount]; nvme_i++)
     {
-        // The hardware supports up to 16 drives. Stop if index goes beyond.
-        if (nvme_i >= 16) break;
+        // The hardware supports up to 24 drives. Stop if index goes beyond.
+        if (nvme_i >= 24) break;
 
         print_nvme_basic_management_info(&bmc_report[NVME_MEM_OFFSET + (nvme_i * NVME_READ_COUNT)]);
     }
@@ -991,8 +991,8 @@ cpld1_init:
             // Loop through all detected NVMe drives and print their information.
             for (nvme_i = 0; nvme_i < bmc_report[cpld_hdd_amount]; nvme_i++)
             {
-                // The hardware supports up to 16 drives. Stop if index goes beyond.
-                if (nvme_i >= 16) break;
+                // The hardware supports up to 24 drives. Stop if index goes beyond.
+                if (nvme_i >= 24) break;
 
                 print_nvme_basic_management_info(&bmc_report[NVME_MEM_OFFSET + (nvme_i * NVME_READ_COUNT)]);
             }
@@ -1125,7 +1125,7 @@ cpld1_init:
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x07;
                 response_buff[2] = 0x28;
-                response_buff[3] = 0x01;
+                response_buff[3] = 0x02;
 
                 // Prepare and send the version number response.
                 for (i = 0; i < 1024; i++)

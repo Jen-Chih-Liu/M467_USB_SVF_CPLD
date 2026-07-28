@@ -535,6 +535,14 @@ int do_hdd_info(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_13,
         boardInfo.nvme_slot_14,
         boardInfo.nvme_slot_15,
+        boardInfo.nvme_slot_16,
+        boardInfo.nvme_slot_17,
+        boardInfo.nvme_slot_18,
+        boardInfo.nvme_slot_19,
+        boardInfo.nvme_slot_20,
+        boardInfo.nvme_slot_21,
+        boardInfo.nvme_slot_22,
+        boardInfo.nvme_slot_23,
     };
 
     char key_buf[16];
@@ -618,6 +626,14 @@ if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
         boardInfo1.nvme_slot_13,
         boardInfo1.nvme_slot_14,
         boardInfo1.nvme_slot_15,
+        boardInfo1.nvme_slot_16,
+        boardInfo1.nvme_slot_17,
+        boardInfo1.nvme_slot_18,
+        boardInfo1.nvme_slot_19,
+        boardInfo1.nvme_slot_20,
+        boardInfo1.nvme_slot_21,
+        boardInfo1.nvme_slot_22,
+        boardInfo1.nvme_slot_23,
     };
 
     char key_buf1[16];

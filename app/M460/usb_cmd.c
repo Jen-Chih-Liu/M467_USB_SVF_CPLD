@@ -863,6 +863,14 @@ uint32_t read_board(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,
     memcpy(board_dat->nvme_slot_13, &in_data[0x2A0], NVME_INFO_LEN);
     memcpy(board_dat->nvme_slot_14, &in_data[0x2C0], NVME_INFO_LEN);
     memcpy(board_dat->nvme_slot_15, &in_data[0x2E0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_16, &in_data[0x300], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_17, &in_data[0x320], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_18, &in_data[0x340], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_19, &in_data[0x360], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_20, &in_data[0x380], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_21, &in_data[0x3A0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_22, &in_data[0x3C0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_23, &in_data[0x3E0], NVME_INFO_LEN);
 
     return 0; // Success
 }
@@ -936,6 +944,14 @@ uint32_t read_board_cpld1(libusb_device_handle* handle, uint8_t ep_out, uint8_t 
     memcpy(board_dat->nvme_slot_13, &in_data[0x2A0], NVME_INFO_LEN);
     memcpy(board_dat->nvme_slot_14, &in_data[0x2C0], NVME_INFO_LEN);
     memcpy(board_dat->nvme_slot_15, &in_data[0x2E0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_16, &in_data[0x300], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_17, &in_data[0x320], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_18, &in_data[0x340], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_19, &in_data[0x360], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_20, &in_data[0x380], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_21, &in_data[0x3A0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_22, &in_data[0x3C0], NVME_INFO_LEN);
+    memcpy(board_dat->nvme_slot_23, &in_data[0x3E0], NVME_INFO_LEN);
 
     return 0; // Success
 }

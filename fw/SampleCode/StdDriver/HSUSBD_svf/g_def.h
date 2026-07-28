@@ -73,6 +73,14 @@
 #define nvme_slot_13 0x2a0
 #define nvme_slot_14 0x2c0
 #define nvme_slot_15 0x2e0
+#define nvme_slot_16 0x300
+#define nvme_slot_17 0x320
+#define nvme_slot_18 0x340
+#define nvme_slot_19 0x360
+#define nvme_slot_20 0x380
+#define nvme_slot_21 0x3a0
+#define nvme_slot_22 0x3c0
+#define nvme_slot_23 0x3e0
 
 extern volatile uint8_t bmc_report[1024] __attribute__((aligned(4))) ;
 extern volatile uint8_t bmc_report1[1024] __attribute__((aligned(4))) ;

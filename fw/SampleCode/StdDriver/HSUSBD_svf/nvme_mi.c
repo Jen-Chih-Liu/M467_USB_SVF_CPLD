@@ -26,7 +26,8 @@ const uint8_t s_au8_PCA9848_Addr[] =
 {
     (0xB2 >> 1), // MUX 1 Address
     (0xB4 >> 1), // MUX 2 Address
-    
+    (0xB6 >> 1), // MUX 3 Address
+
 };
 
 /**
@@ -322,7 +323,7 @@ void nvm_mi_read(void)
     if (bmc_report[cpld_hdd_amount] == 0xff)
         return;
 
-    if (bmc_report[cpld_hdd_amount] > 15)
+    if (bmc_report[cpld_hdd_amount] > 23)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
@@ -350,8 +351,13 @@ void nvm_mi_read(void)
 
         if (mux_TCA9548_flag == 0)
         {
-            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 0);
-            SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[1], 0);
+            // Reset every PCA9848 MUX to channel 0 so no stale channel from a
+            // previous MUX stays enabled (important once more than one MUX is used).
+            uint8_t u8ResetIdx;
+            for (u8ResetIdx = 0; u8ResetIdx < u8MuxCount; u8ResetIdx++)
+            {
+                SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8ResetIdx], 0);
+            }
 
             // Select the I2C channel for the current NVMe slot.
             if (!SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
@@ -410,7 +416,7 @@ void nvm_mi_read_1(void)
     if (bmc_report1[cpld_hdd_amount] == 0xff)
         return;
 
-    if (bmc_report1[cpld_hdd_amount] > 15)
+    if (bmc_report1[cpld_hdd_amount] > 23)
         return;
 
     // Set HWM_SEL pin to low to enable the I2C bus for NVMe drives.
@@ -437,8 +443,13 @@ void nvm_mi_read_1(void)
 
         if (mux_TCA9548_flag == 0)
         {
-            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[0], 0);
-            SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[1], 0);
+            // Reset every PCA9848 MUX to channel 0 so no stale channel from a
+            // previous MUX stays enabled (important once more than one MUX is used).
+            uint8_t u8ResetIdx;
+            for (u8ResetIdx = 0; u8ResetIdx < u8MuxCount; u8ResetIdx++)
+            {
+                SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8ResetIdx], 0);
+            }
 
             // Select the I2C channel for the current NVMe slot.
             if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
