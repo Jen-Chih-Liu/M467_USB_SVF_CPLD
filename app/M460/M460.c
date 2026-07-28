@@ -2363,17 +2363,18 @@ int handle_dumpall(int count, int argc, char* argv[]) {
     dumpall_printf("cpld test version: 0x%x\n\r", boardInfo.cpld_test_ver);
     dumpall_printf("cpld hdd amount: 0x%x\n\r", boardInfo.hdd_amount);
     dumpall_printf("cpld jtag id: 0x%x\n\r", boardInfo.jtag_id);
-    for (uint8_t loc = 0; loc < boardInfo.hdd_amount; loc++)
+    uint8_t reg_count = (boardInfo.hdd_amount > 16) ? 16 : boardInfo.hdd_amount;
+    for (uint8_t loc = 0; loc < reg_count; loc++)
     {
         dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_port_status + loc, boardInfo.cpld_reg_40_4f[loc]);
     }
 
-    for (uint8_t loc = 0; loc < boardInfo.hdd_amount; loc++)
+    for (uint8_t loc = 0; loc < reg_count; loc++)
     {
         dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_status + loc, boardInfo.cpld_reg_50_5f[loc]);
     }
 
-    for (uint8_t loc = 0; loc < boardInfo.hdd_amount; loc++)
+    for (uint8_t loc = 0; loc < reg_count; loc++)
     {
         dumpall_printf("cpld led register [0x%x]: 0x%x\n\r", cpld_hdd_led + loc, boardInfo.cpld_reg_60_6f[loc]);
     }
@@ -2387,8 +2388,15 @@ int handle_dumpall(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_10, boardInfo.nvme_slot_11,
         boardInfo.nvme_slot_12, boardInfo.nvme_slot_13,
         boardInfo.nvme_slot_14, boardInfo.nvme_slot_15,
+        boardInfo.nvme_slot_16, boardInfo.nvme_slot_17,
+        boardInfo.nvme_slot_18, boardInfo.nvme_slot_19,
+        boardInfo.nvme_slot_20, boardInfo.nvme_slot_21,
+        boardInfo.nvme_slot_22, boardInfo.nvme_slot_23,
     };
-    for (int i = 0; i < boardInfo.hdd_amount; i++) {
+    int nvme_count = boardInfo.hdd_amount;
+    if (nvme_count > (int)(sizeof(nvme_slots) / sizeof(nvme_slots[0])))
+        nvme_count = (int)(sizeof(nvme_slots) / sizeof(nvme_slots[0]));
+    for (int i = 0; i < nvme_count; i++) {
         dumpall_printf("dump_nvme%d\n\r", i);
         print_nvme_basic_management_info(&nvme_slots[i][0]);
     }
@@ -2413,17 +2421,18 @@ int handle_dumpall(int count, int argc, char* argv[]) {
     dumpall_printf("cpld test version: 0x%x\n\r", boardInfo1.cpld_test_ver);
     dumpall_printf("cpld hdd amount: 0x%x\n\r", boardInfo1.hdd_amount);
     dumpall_printf("cpld jtag id: 0x%x\n\r", boardInfo1.jtag_id);
-    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    uint8_t reg_count1 = (boardInfo1.hdd_amount > 16) ? 16 : boardInfo1.hdd_amount;
+    for (uint8_t loc = 0; loc < reg_count1; loc++)
     {
         dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_port_status + loc, boardInfo1.cpld_reg_40_4f[loc]);
     }
 
-    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    for (uint8_t loc = 0; loc < reg_count1; loc++)
     {
         dumpall_printf("cpld port status register [0x%x]: 0x%x\n\r", cpld_hdd_status + loc, boardInfo1.cpld_reg_50_5f[loc]);
     }
 
-    for (uint8_t loc = 0; loc < boardInfo1.hdd_amount; loc++)
+    for (uint8_t loc = 0; loc < reg_count1; loc++)
     {
         dumpall_printf("cpld led register [0x%x]: 0x%x\n\r", cpld_hdd_led + loc, boardInfo1.cpld_reg_60_6f[loc]);
     }
@@ -2437,8 +2446,15 @@ int handle_dumpall(int count, int argc, char* argv[]) {
         boardInfo1.nvme_slot_10, boardInfo1.nvme_slot_11,
         boardInfo1.nvme_slot_12, boardInfo1.nvme_slot_13,
         boardInfo1.nvme_slot_14, boardInfo1.nvme_slot_15,
+        boardInfo1.nvme_slot_16, boardInfo1.nvme_slot_17,
+        boardInfo1.nvme_slot_18, boardInfo1.nvme_slot_19,
+        boardInfo1.nvme_slot_20, boardInfo1.nvme_slot_21,
+        boardInfo1.nvme_slot_22, boardInfo1.nvme_slot_23,
     };
-    for (int i = 0; i < boardInfo1.hdd_amount; i++) {
+    int nvme_count1 = boardInfo1.hdd_amount;
+    if (nvme_count1 > (int)(sizeof(nvme_slots1) / sizeof(nvme_slots1[0])))
+        nvme_count1 = (int)(sizeof(nvme_slots1) / sizeof(nvme_slots1[0]));
+    for (int i = 0; i < nvme_count1; i++) {
         dumpall_printf("dump_nvme%d\n\r", i);
         print_nvme_basic_management_info(&nvme_slots1[i][0]);
     }
