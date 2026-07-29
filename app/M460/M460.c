@@ -1141,8 +1141,16 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
         boardInfo.nvme_slot_11,
         boardInfo.nvme_slot_12,
         boardInfo.nvme_slot_13,
-        boardInfo.nvme_slot_14,  // Fix: was missing, caused OOB when hdd_amount > 14
-        boardInfo.nvme_slot_15,  // Fix: was missing, caused OOB when hdd_amount > 15
+        boardInfo.nvme_slot_14,
+        boardInfo.nvme_slot_15,
+        boardInfo.nvme_slot_16,
+        boardInfo.nvme_slot_17,
+        boardInfo.nvme_slot_18,
+        boardInfo.nvme_slot_19,
+        boardInfo.nvme_slot_20,
+        boardInfo.nvme_slot_21,
+        boardInfo.nvme_slot_22,
+        boardInfo.nvme_slot_23,
     };
 
     // 2. Create JSON object
@@ -1245,8 +1253,16 @@ if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
         boardInfo1.nvme_slot_11,
         boardInfo1.nvme_slot_12,
         boardInfo1.nvme_slot_13,
-        boardInfo1.nvme_slot_14,  // Fix: was missing, caused OOB when hdd_amount > 14
-        boardInfo1.nvme_slot_15,  // Fix: was missing, caused OOB when hdd_amount > 15
+        boardInfo1.nvme_slot_14,
+        boardInfo1.nvme_slot_15,
+        boardInfo1.nvme_slot_16,
+        boardInfo1.nvme_slot_17,
+        boardInfo1.nvme_slot_18,
+        boardInfo1.nvme_slot_19,
+        boardInfo1.nvme_slot_20,
+        boardInfo1.nvme_slot_21,
+        boardInfo1.nvme_slot_22,
+        boardInfo1.nvme_slot_23,
     };
 
     // 2. Create JSON object
