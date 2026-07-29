@@ -509,7 +509,7 @@ static int I2C_ReadReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
     buf = soft_i2c_read_byte(1);    /* NACK = last byte */
     soft_i2c_stop();
 
-    printf("data=0x%x\n\r", buf);
+   // printf("data=0x%x\n\r", buf);
     *data = buf;
     ret = 0;
 
@@ -813,7 +813,7 @@ int FanIC_BackupRegisters(void)
             continue;
         }
 
-        printf("reg=0x%x\n\r", reg_index);
+        //printf("reg=0x%x\n\r", reg_index);
         if (fan_address_0x40_d == 1)
         {
             // Read register from IC at address 0x40
