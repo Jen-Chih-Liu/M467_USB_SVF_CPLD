@@ -283,12 +283,12 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
  */
 uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 {
-    printf("u8MuxAddr=0x%x\n\r",u8MuxAddr);
-    printf("u8Channel=0x%x\n\r",u8Channel);
+    //printf("u8MuxAddr=0x%x\n\r",u8MuxAddr);
+   // printf("u8Channel=0x%x\n\r",u8Channel);
     if (I2C_WriteByte(i2c_bus, u8MuxAddr, (0x01 << u8Channel)) != 0)
     {
         // Optional: Add error logging here if needed.
-         printf("Failed to select MU//X channel %d\n", u8Channel);
+         //printf("Failed to select MU//X channel %d\n", u8Channel);
         return 0; // Failure
     }
 
@@ -360,6 +360,21 @@ void nvm_mi_read(void)
         //  printf("u8ChannelOnMux=0x%x\n\r",u8ChannelOnMux);
         // Determine the destination buffer for the current slot.
         pu8Dest = &bmc_report[NVME_MEM_OFFSET + (u8SlotIndex * NVME_READ_COUNT)];
+
+        // Only NVMe drives support NVMe-MI commands. The CPLD port status
+        // register stores 2 bits per slot (0b11 = NVMe present); only read
+        // those slots and skip everything else (empty / SATA / not present).
+        {
+            uint8_t u8PortStatus = bmc_report[cpld_hdd_port_status + (u8SlotIndex / 4)];
+            uint8_t u8SlotBits = (u8PortStatus >> ((u8SlotIndex % 4) * 2)) & 0x03;
+
+            if (u8SlotBits != 0x03)
+            {
+                // Not an NVMe drive: mark data invalid and skip.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
+        }
 
         // Ensure the calculated MUX index is within the bounds of our address array.
         if (u8MuxIndex >= u8MuxCount)
@@ -456,6 +471,21 @@ void nvm_mi_read_1(void)
 
         // Determine the destination buffer for the current slot.
         pu8Dest = &bmc_report1[NVME_MEM_OFFSET + (u8SlotIndex * NVME_READ_COUNT)];
+
+        // Only NVMe drives support NVMe-MI commands. The CPLD port status
+        // register stores 2 bits per slot (0b11 = NVMe present); only read
+        // those slots and skip everything else (empty / SATA / not present).
+        {
+            uint8_t u8PortStatus = bmc_report1[cpld_hdd_port_status + (u8SlotIndex / 4)];
+            uint8_t u8SlotBits = (u8PortStatus >> ((u8SlotIndex % 4) * 2)) & 0x03;
+
+            if (u8SlotBits != 0x03)
+            {
+                // Not an NVMe drive: mark data invalid and skip.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                continue;
+            }
+        }
 
         // Ensure the calculated MUX index is within the bounds of our address array.
         if (u8MuxIndex >= u8MuxCount)

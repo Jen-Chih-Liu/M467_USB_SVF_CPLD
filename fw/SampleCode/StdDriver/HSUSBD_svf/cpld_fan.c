@@ -117,6 +117,7 @@ int  CPLD_read1(void)
  *          operations but includes active printf statements to output the CPLD
  *          version and error messages to the console, likely for debugging purposes.
  */
+#if 0
 void CPLD_read_AFTER(void)
 {
     unsigned char local_cnt;
@@ -167,6 +168,7 @@ void CPLD_read_AFTER(void)
 
     }
 }
+#endif
 /**
  * @brief Reads the temperature from an external temperature sensor via I2C.
  * @details This function reads two bytes (high and low) from the temperature
@@ -516,14 +518,16 @@ static int I2C_ReadReg(uint8_t i2c_addr, uint8_t reg, uint8_t *data)
 exit:
     soft_i2c_exit();
     if (ret != 0)
+		{
         printf("false\n\r");
+		}
     return ret;
 }
 
 /* ==============================================================================
  * 6. NCT7363Y Chip Driver Layer (Independent of logical models, manages IC only)
  * ============================================================================== */
-
+#if 0
 /**
  * @brief Sets the PWM duty for a single NCT7363Y channel.
  */
@@ -560,7 +564,7 @@ int NCT7363Y_GetRpm(uint8_t i2c_addr, uint8_t tach_ch, uint32_t *rpm)
 
     return 0;
 }
-
+#endif
 /* ==============================================================================
  * 7. System Fan Management Layer (Fan Manager)
  * ============================================================================== */
@@ -568,6 +572,7 @@ int NCT7363Y_GetRpm(uint8_t i2c_addr, uint8_t tach_ch, uint32_t *rpm)
 /**
  * @brief System Initialization: Detects model, loads mapping table, and initializes hardware.
  */
+#if 0
 void FanManager_Init(MachineModel_t current_model)
 {
     int i;
@@ -636,7 +641,8 @@ void FanManager_Init(MachineModel_t current_model)
         }
     }
 }
-
+#endif
+#if 0
 /**
  * @brief Application Interface: Sets logical fan speed (0-100%).
  */
@@ -709,7 +715,8 @@ void fan_read(void)
         }
     }
 }
-
+#endif
+#if 0
 void fan_inital(void)
 {
     // For this implementation, we are hardcoding it to a default model.
@@ -735,7 +742,7 @@ void fan_inital(void)
     FanManager_SetFanSpeed(LOGICAL_FAN_15, 30); // Set CPU Fan 1 to 30% duty
     FanManager_SetFanSpeed(LOGICAL_FAN_16, 30); // Set CPU Fan 1 to 30% duty
 }
-
+#endif
 /**
  * @brief Backup all registers from two NCT7363Y fan ICs via I2C0.
  * @details This function reads all registers (0x00 to 0xFE) from both fan ICs
