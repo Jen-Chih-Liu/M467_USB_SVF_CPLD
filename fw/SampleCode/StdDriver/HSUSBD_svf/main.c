@@ -624,6 +624,30 @@ extern const uint8_t s_au8_PCA9848_Addr[];
 volatile uint8_t temp_w_buf[4] = {0};
 volatile uint8_t temp_r_buf[4] = {0};
 extern  uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel);
+
+/*--------------------------------------------------------------------------*/
+/* DWT cycle-counter based profiling (Cortex-M4)                            */
+/* Resolution = 1 CPU cycle (5 ns @ 200 MHz). CYCCNT is 32-bit and wraps    */
+/* after ~21 s at 200 MHz, which is far longer than any function measured.  */
+/*--------------------------------------------------------------------------*/
+static void DWT_ProfileInit(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk; /* Enable trace subsystem */
+    DWT->CYCCNT = 0;
+    DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;           /* Enable cycle counter   */
+}
+
+/* Measure 'code', print cycles and microseconds with a label. */
+#define PROFILE_US(label, code)                                             \
+    do {                                                                    \
+        uint32_t _t0 = DWT->CYCCNT;                                          \
+        code;                                                               \
+        uint32_t _cyc = DWT->CYCCNT - _t0;                                   \
+        printf("%-24s %10lu cyc  %8lu us\n\r", (label),                      \
+               (unsigned long)_cyc,                                         \
+               (unsigned long)(_cyc / (SystemCoreClock / 1000000UL)));      \
+    } while (0)
+
 /**
  * @brief  Main function.
  * @param  None
@@ -635,6 +659,9 @@ int main(void)
     unsigned char  data_len;
     /* Init System, peripheral clock and multi-function I/O */
     SYS_Init();
+
+    /* Enable DWT cycle counter for function profiling */
+    DWT_ProfileInit();
 
     /* Init UART to 115200-8n1 for print message */
     UART_Open(UART3, 115200);
@@ -916,17 +943,39 @@ cpld1_init:
             {
                 if (PC14 == 0)
                 {
-                    FanIC_BackupRegisters();
-                    FanIC_CompareAndRestore();
-                    CPLD_read();          // Read CPLD status.
-                    //fan_read();           // Read fan speed and duty cycle.
-                    tempersensor_read();  // Read temperature sensor.
-                    nvm_mi_read();        // Read NVMe drive information.
+                    static uint8_t s_u8ProfileDone = 0; /* Run DWT profiling only once */
 
-                    if (g_u32clpd_lost == 0)
+                    if (s_u8ProfileDone == 0)
                     {
-                        CPLD_read1();          // Read CPLD status.
-                        nvm_mi_read_1();
+                        PROFILE_US("FanIC_BackupRegisters",   FanIC_BackupRegisters());
+                        PROFILE_US("FanIC_CompareAndRestore", FanIC_CompareAndRestore());
+                        PROFILE_US("CPLD_read",               CPLD_read());          // Read CPLD status.
+                        //fan_read();           // Read fan speed and duty cycle.
+                        PROFILE_US("tempersensor_read",       tempersensor_read());  // Read temperature sensor.
+                        PROFILE_US("nvm_mi_read",             nvm_mi_read());        // Read NVMe drive information.
+
+                        if (g_u32clpd_lost == 0)
+                        {
+                            PROFILE_US("CPLD_read1",  CPLD_read1());          // Read CPLD status.
+                            PROFILE_US("nvm_mi_read_1", nvm_mi_read_1());
+                        }
+
+                        s_u8ProfileDone = 1; /* Disable profiling after first measurement */
+                    }
+                    else
+                    {
+                        FanIC_BackupRegisters();
+                        FanIC_CompareAndRestore();
+                        CPLD_read();          // Read CPLD status.
+                        //fan_read();           // Read fan speed and duty cycle.
+                        tempersensor_read();  // Read temperature sensor.
+                        nvm_mi_read();        // Read NVMe drive information.
+
+                        if (g_u32clpd_lost == 0)
+                        {
+                            CPLD_read1();          // Read CPLD status.
+                            nvm_mi_read_1();
+                        }
                     }
                 }
 

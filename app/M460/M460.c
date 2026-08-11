@@ -1125,7 +1125,7 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
         cJSON_Delete(root);
         return -1;
     }
-    int total_slots = boardInfo.hdd_amount;;
+    int total_slots = boardInfo.hdd_amount;
     uint8_t* slot_ptrs[] = {
         boardInfo.nvme_slot_0,
         boardInfo.nvme_slot_1,
@@ -1175,8 +1175,8 @@ int do_hdd_temp(int count, int argc, char* argv[]) {
 
         // [Step D] Extract 2 bits status
         uint8_t status_bits = (raw_byte >> bit_shift) & 0x03;
-
-        if (status_bits == 0x01 || status_bits == 0x03) {
+        //only nvme mi show temperature
+        if (status_bits == 0x03) {
 
             /////////////////////////////////////////////////
             uint8_t* raw_data = slot_ptrs[i];
@@ -1287,8 +1287,8 @@ if (boardInfo1.cpld_version == 0x0||boardInfo1.cpld_version == 0xff)
 
         // [Step D] Extract 2 bits status
         uint8_t status_bits = (raw_byte >> bit_shift) & 0x03;
-
-        if (status_bits == 0x01 || status_bits == 0x03) {
+        //only nvme mi show temperature
+        if (status_bits == 0x03) {
 
             /////////////////////////////////////////////////
             uint8_t* raw_data = slot_ptrs1[i];
