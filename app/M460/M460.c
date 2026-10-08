@@ -3009,6 +3009,239 @@ int handle_eeprom(int count, int argc, char* argv[]) {
 
      return 0;
 }
+
+// -----------------------------------------------------------------------------
+// Group: m463 NVMe-MI single-command execution
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Human-readable names for the 19 m463 NVMe-MI commands (1-based).
+ *
+ * Index 0 is unused so that CommandID maps directly to the array index.
+ */
+static const char* g_nvme_mi_cmd_names[] = {
+    "Invalid",              //  0 (unused)
+    "Basic Management",     //  1
+    "Get Endpoint UUID",    //  2
+    "Get Msg Type Support", //  3
+    "Read MI Data Struct",  //  4
+    "Configuration Set",    //  5
+    "Configuration Get",    //  6
+    "VPD Read",             //  7
+    "VPD Write",            //  8
+    "Reset (unsupported)",  //  9
+    "Health Status Poll",   // 10
+    "Ctrl Health Poll",     // 11
+    "Health Info+Alerts",   // 12
+    "Power Management",      // 13
+    "FW Revision",          // 14
+    "Health Alerts",        // 15
+    "Health Info",          // 16
+    "SMART Log",            // 17
+    "Device Identify",      // 18
+    "Format NVM",           // 19
+};
+
+#define NVME_MI_CMD_COUNT 19
+
+/**
+ * @brief Handles the top-level "NVMEMI" command.
+ *
+ * Usage: M460 <USBIndex> NVMEMI <CommandID> <NVMEIndex> [Dword0] [Dword1]
+ *   - CommandID : which NVMe-MI command to run (1..19, see list above)
+ *   - NVMEIndex : target NVMe drive slot (1-based; 1 = first drive). Converted
+ *                 to the 0-based slot the firmware/mux expects internally.
+ *   - Dword0    : (optional) NVMe-MI Management Request Dword0 (0x-hex or decimal)
+ *   - Dword1    : (optional) NVMe-MI Management Request Dword1 (0x-hex or decimal)
+ *
+ * Emits a JSON result. Success example:
+ *   {
+ *     "NVMEIndex": 1,
+ *     "CommandID": 1,
+ *     "Command": "Basic Management",
+ *     "Status": "Success",
+ *     "Data": { "Count": 4, "Raw data": "00,01,FF,33" }
+ *   }
+ * Fail example:
+ *   {
+ *     "NVMEIndex": 1,
+ *     "CommandID": 19,
+ *     "Command": "Format NVM",
+ *     "Status": "Fail",
+ *     "Data": { "Error": "NVMe-MI command failed, <reason>" }
+ *   }
+ * Format NVM in-progress example (CommandID 19 only; not an error, exit code 2):
+ *   {
+ *     "NVMEIndex": 1,
+ *     "CommandID": 19,
+ *     "Command": "Format NVM",
+ *     "Status": "InProgress",
+ *     "Data": {
+ *       "Reason": "Drive returned 'More Processing Required' (NVMe-MI Status 0x01): ...",
+ *       "Hint": "... poll with NVMEMI 1 <NVMEIndex> or NVMEMI 17 <NVMEIndex> 0x00000000 ..."
+ *     }
+ *   }
+ *
+ * @param count USB device index
+ * @param argc  Argument count (argv[0]="NVMEMI")
+ * @param argv  Argument array: [0]="NVMEMI", [1]=CommandID, [2]=NVMEIndex
+ * @return int 0 on success, 2 when Format NVM (CommandID 19) is still in
+ *             progress ("More Processing Required"), -1 on error
+ */
+int handle_nvmemi(int count, int argc, char* argv[]) {
+    // Require both CommandID and NVMEIndex.
+    if (argc < 3) {
+        cJSON* root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "Status", "Fail");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "Error",
+            "Usage: NVMEMI <CommandID(1..19)> <NVMEIndex> [Dword0] [Dword1]");
+        cJSON_AddItemToObject(root, "Data", data);
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    int cmd_id     = atoi(argv[1]);
+    int nvme_index = atoi(argv[2]);   // user-facing 1-based slot number (1 = first)
+    // Optional NVMe-MI Management Request Dword0/Dword1 (accept 0x-hex or decimal).
+    unsigned int dword0 = (argc >= 4) ? (unsigned int)strtoul(argv[3], NULL, 0) : 0u;
+    unsigned int dword1 = (argc >= 5) ? (unsigned int)strtoul(argv[4], NULL, 0) : 0u;
+
+    // VPD Write (CmdID 8) carries a data payload instead of Dword1:
+    //   NVMEMI 8 <NVMEIndex> <DOFST> <byte0> <byte1> ...
+    //   Dword0 = DOFST (argv[3]); argv[4..] = data bytes (0x-hex or decimal, 0..255).
+    //   DLEN is derived in firmware from the number of bytes carried.
+    unsigned char  vpd_data[180];
+    unsigned int   vpd_len = 0u;
+    const unsigned char* data_ptr = NULL;
+    unsigned int         data_len = 0u;
+    if (cmd_id == 8) {
+        dword1 = 0u; // not used for VPD Write; DLEN is the carried byte count
+        for (int a = 4; a < argc && vpd_len < sizeof(vpd_data); a++) {
+            vpd_data[vpd_len++] = (unsigned char)(strtoul(argv[a], NULL, 0) & 0xFFu);
+        }
+        data_ptr = vpd_data;
+        data_len = vpd_len;
+    }
+    const char* cmd_name =
+        (cmd_id >= 1 && cmd_id <= NVME_MI_CMD_COUNT) ? g_nvme_mi_cmd_names[cmd_id] : "Unknown";
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "NVMEIndex", nvme_index);
+    cJSON_AddNumberToObject(root, "CommandID", cmd_id);
+    cJSON_AddStringToObject(root, "Command", cmd_name);
+
+    // Validate CommandID range before hitting the device.
+    if (cmd_id < 1 || cmd_id > NVME_MI_CMD_COUNT) {
+        cJSON_AddStringToObject(root, "Status", "Fail");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "Error",
+            "NVMe-MI command failed, CommandID out of range (1..19)");
+        cJSON_AddItemToObject(root, "Data", data);
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    // NVMEIndex is 1-based on the command line (1 = first drive); reject 0/negative.
+    if (nvme_index < 1) {
+        cJSON_AddStringToObject(root, "Status", "Fail");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "Error",
+            "NVMe-MI command failed, NVMEIndex must be >= 1 (1-based slot number)");
+        cJSON_AddItemToObject(root, "Data", data);
+        char* out = cJSON_Print(root);
+        json_printf("%s\n", out);
+        free(out);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    NvmeMiResult_t result;
+    memset(&result, 0, sizeof(result));
+
+    // Convert the user-facing 1-based NVMEIndex to the 0-based slot the
+    // firmware/mux uses internally.
+    int ret = usbd_multi_nvme_mi_cmd((unsigned char)count,
+                                     (unsigned char)(nvme_index - 1),
+                                     (unsigned char)cmd_id, dword0, dword1,
+                                     data_ptr, data_len, &result);
+
+    if (ret != 0) {
+        // Transport-level failure (device not found / USB error).
+        cJSON_AddStringToObject(root, "Status", "Fail");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "Error",
+            "NVMe-MI command failed, USB transfer error or device not found");
+        cJSON_AddItemToObject(root, "Data", data);
+    }
+    else if (result.status == 0x00) {
+        // Success: emit ordered raw bytes as comma-separated hex.
+        cJSON_AddStringToObject(root, "Status", "Success");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddNumberToObject(data, "Count", result.data_count);
+
+        char raw_buf[256 * 3 + 1];
+        int  pos = 0;
+        raw_buf[0] = '\0';
+        for (int i = 0; i < result.data_count; i++) {
+            int n = snprintf(raw_buf + pos, sizeof(raw_buf) - pos,
+                             (i == 0) ? "%02X" : ",%02X", result.data[i]);
+            if (n < 0 || pos + n >= (int)sizeof(raw_buf)) break;
+            pos += n;
+        }
+        cJSON_AddStringToObject(data, "Raw data", raw_buf);
+        cJSON_AddItemToObject(root, "Data", data);
+    }
+    else if (cmd_id == 19 && strstr(result.error, "NVMe Admin Status 0x01") != NULL) {
+        // Format NVM returned NVMe-MI Status 0x01 ("More Processing Required"):
+        // the drive accepted the command and is still formatting in the
+        // background. This is NOT a failure - report it distinctly and tell
+        // the caller how to poll for completion with a different, lightweight
+        // read-only command instead of re-issuing Format NVM.
+        cJSON_AddStringToObject(root, "Status", "InProgress");
+        cJSON* data = cJSON_CreateObject();
+        cJSON_AddStringToObject(data, "Reason",
+            "Drive returned 'More Processing Required' (NVMe-MI Status 0x01): "
+            "Format NVM is still running in the background on this drive.");
+        cJSON_AddStringToObject(data, "Hint",
+            "This is expected while formatting is in progress, not an error. "
+            "Do NOT re-run Format NVM. Instead, poll the drive with a different, "
+            "non-destructive command on the same NVMEIndex, e.g.:\n"
+            "  M460 <usb> NVMEMI 1 <NVMEIndex>              (Basic Management)\n"
+            "  M460 <usb> NVMEMI 17 <NVMEIndex> 0x00000000  (SMART Log)\n"
+            "Formatting is complete once that command returns Status=\"Success\" "
+            "again. Repeat every few seconds until it does.");
+        cJSON_AddItemToObject(root, "Data", data);
+    }
+    else {
+        // Firmware reported a command-level failure with a reason string.
+        cJSON_AddStringToObject(root, "Status", "Fail");
+        cJSON* data = cJSON_CreateObject();
+        char err_buf[300];
+        snprintf(err_buf, sizeof(err_buf), "NVMe-MI command failed, %s",
+                 (result.error[0] != '\0') ? result.error : "unknown reason");
+        cJSON_AddStringToObject(data, "Error", err_buf);
+        cJSON_AddItemToObject(root, "Data", data);
+    }
+
+    char* out = cJSON_Print(root);
+    json_printf("%s\n", out);
+    free(out);
+    cJSON_Delete(root);
+
+    if (ret == 0 && result.status == 0x00)
+        return 0;  // Success
+    if (cmd_id == 19 && strstr(result.error, "NVMe Admin Status 0x01") != NULL)
+        return 2;  // Format NVM still in progress (not a failure)
+    return -1;     // Failure
+}
+
 // =============================================================================
 // 3. Main Command Dispatch Table
 // =============================================================================
@@ -3027,8 +3260,8 @@ int handle_eeprom(int count, int argc, char* argv[]) {
 cmd_entry_t cmd_table[] = {
     {"CPLD",      handle_cpld,       "CPLD Id / Version / Get / Set"},
     {"HDD",       handle_hdd,        "HDD Info / Port / LED / Temp / NVMe-Mi"},
-    {"Update",    handle_update,     "Update <M463/CPLD>"},
-    {"Version",   handle_version,    "Version <MCU>"},
+    {"NVMEMI",    handle_nvmemi,     "NVMEMI <CommandID 1..19> <NVMEIndex> [Dword0] [Dword1]"},
+    {"Update",    handle_update,     "Update <M463/CPLD>"},    {"Version",   handle_version,    "Version <MCU>"},
     {"BPB",       handle_bpb,        "BPB Sensor Get"},
     {"Reset",     handle_reset,      "Reset system"},
     {"I2CBYPASS", handle_i2c_bypass, "I2C0 Bypass <Cmd>"},
@@ -3083,6 +3316,10 @@ int main(int argc, char* argv[]) {
         dbg_printf("Available Commands:\n");
         for (int i = 0; cmd_table[i].name != NULL; i++) {
             dbg_printf("  %-10s : %s\n", cmd_table[i].name, cmd_table[i].help);
+        }
+        dbg_printf("\nNVMe-MI CommandID list (for NVMEMI <CommandID> <NVMEIndex>):\n");
+        for (int i = 1; i <= NVME_MI_CMD_COUNT; i++) {
+            dbg_printf("  %2d : %s\n", i, g_nvme_mi_cmd_names[i]);
         }
         return 1;
     }

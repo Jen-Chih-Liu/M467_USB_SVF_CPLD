@@ -26,6 +26,15 @@ A cross-platform command-line utility for managing Nuvoton M460/M463 MCU-based s
   - Read drive temperature sensors
   - Manage LED indicators (Standby, Fault, Locate, Rebuild states)
   - Query drive information via passthrough I2C commands
+
+- **NVMe-MI (Management Interface)**
+  - Execute on-demand NVMe-MI commands over MCTP-over-SMBus (`NVMEMI`)
+  - 19 supported CommandIDs: Basic Management, VPD Read/Write, Configuration
+    Get/Set, Health Status Poll, SMART Log, Device Identify, Format NVM, etc.
+  - 1-based drive slot addressing (`NVMEIndex`, 1 = first drive)
+  - **Dual-CPLD support**: drive slots span both CPLD banks as one flat range —
+    slots within the first CPLD are routed to I2C1, slots beyond it to the
+    second CPLD's UI2C0 bus automatically
   
 - **Fan Control & Monitoring**
   - Monitor individual fan RPM (rotations per minute)
@@ -365,6 +374,69 @@ M460.exe <Count> BPB Sensor Get
 }
 ```
 
+#### NVMe-MI Commands
+
+Execute NVMe-MI Management Interface commands against a single drive over
+MCTP-over-SMBus.
+
+```bash
+M460.exe <Count> NVMEMI <CommandID> <NVMEIndex> [Dword0] [Dword1]
+```
+
+**Parameters:**
+- `<CommandID>`: Which NVMe-MI command to run (`1..19`, see table below)
+- `<NVMEIndex>`: Target NVMe drive slot, **1-based** (`1` = first drive).
+  Converted to the 0-based global slot the firmware uses internally.
+- `[Dword0]` / `[Dword1]`: Optional NVMe-MI Management Request DWORDs
+  (accepts `0x`-hex or decimal).
+
+**CommandID Reference:**
+
+| ID | Command | ID | Command |
+| :-- | :--- | :-- | :--- |
+| 1 | Basic Management | 11 | Ctrl Health Poll |
+| 2 | Get Endpoint UUID | 12 | Health Info + Alerts |
+| 3 | Get Msg Type Support | 13 | Power Management |
+| 4 | Read MI Data Struct | 14 | FW Revision |
+| 5 | Configuration Set | 15 | Health Alerts |
+| 6 | Configuration Get | 16 | Health Info |
+| 7 | VPD Read | 17 | SMART Log |
+| 8 | VPD Write | 18 | Device Identify |
+| 9 | Reset (unsupported) | 19 | Format NVM ⚠️ *destructive* |
+| 10 | Health Status Poll | | |
+
+**VPD Write (CommandID 8)** carries a data payload instead of `Dword1`:
+```bash
+M460.exe <Count> NVMEMI 8 <NVMEIndex> <DOFST> <byte0> <byte1> ...
+# Dword0 = DOFST (data offset); trailing args = data bytes (0x-hex or decimal).
+# DLEN is derived in firmware from the number of bytes carried.
+```
+
+**Examples:**
+```bash
+M460.exe 0 NVMEMI 1 1            # Basic Management on the first drive
+M460.exe 0 NVMEMI 7 2 0x00       # VPD Read on drive 2, DOFST=0
+M460.exe 0 NVMEMI 8 1 0 0x11 0x22 # VPD Write drive 1: bytes 0x11,0x22 at offset 0
+M460.exe 0 NVMEMI 17 3           # SMART Log on drive 3
+```
+
+**Dual-CPLD (flat slot indexing):** When a second CPLD is present, its drives
+continue the same 1-based numbering. If the first CPLD reports 8 drives, then
+`NVMEIndex 1..8` target the first CPLD (I2C1) and `NVMEIndex 9`+ target the
+second CPLD (UI2C0) automatically. Requesting a second-CPLD slot when no
+second CPLD is present returns a failure.
+
+**Example Output (Success):**
+```json
+{
+  "NVMEIndex": 1,
+  "CommandID": 1,
+  "Command": "Basic Management",
+  "Status": "Success",
+  "Data": { "Count": 4, "Raw data": "00,01,FF,33" }
+}
+```
+
 ### System Control
 
 #### MCU Operations
@@ -464,6 +536,7 @@ M460.exe <Count> EEPROM READ
 | **CPLD Update** | `UPDATE CPLD logic.svf` | Program CPLD via JTAG/SVF |
 | **Drive Info** | `HDD Info` | List all NVMe drives and info |
 | **Drive Temp** | `HDD Temp` | Read all NVMe temperatures |
+| **NVMe-MI** | `NVMEMI 1 1` | Run NVMe-MI command (1-based slot) |
 | **Fan Control** | `FAN Duty Set 50` | Set all fans to 50% speed |
 | **Fan Monitor** | `FAN Get` | Read all fan RPM values |
 | **Backplane Temp** | `BPB Sensor Get` | Read ambient temperature |
@@ -777,6 +850,9 @@ All commands return JSON with this base structure:
   - Cross-platform (Windows/Linux) support
   - MCU ISP and CPLD SVF programming
   - Complete hardware monitoring (fans, temps, drives)
+  - NVMe-MI command support (`NVMEMI`, 19 CommandIDs) over MCTP-over-SMBus
+  - 1-based `NVMEIndex` drive addressing
+  - Dual-CPLD flat slot indexing (second CPLD's drives routed to UI2C0)
 
 ## ⚙️ Advanced Configuration
 

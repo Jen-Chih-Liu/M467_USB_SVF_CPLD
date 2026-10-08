@@ -10,7 +10,8 @@ This project is a Board Support Package (BSP) sample for the Nuvoton **NuMicro M
     - **Fan Management:** Supports up to 16 logical fan channels across two NCT7363Y fan controllers.
     - **CPLD Monitoring:** Reads hardware status and version information from up to two CPLDs via I2C (I2C0 / I2C2).
     - **Temperature Sensing:** Monitors system temperature using an external I2C sensor.
-    - **NVMe Management:** Reads basic management information from NVMe drives via NVMe MI (UI2C0).
+    - **NVMe Management:** Reads basic management information (temperature) from NVMe drives via SMBus. The first CPLD's drives are polled on I2C1; the second CPLD's drives (when present) on UI2C0.
+    - **NVMe-MI (Management Interface):** Executes on-demand NVMe-MI commands over MCTP-over-SMBus (USB command `0xe0`) — Basic Management, VPD Read/Write, Configuration Get/Set, Health/SMART logs, Device Identify, Format NVM, etc. Drive slots span both CPLD banks as one flat range and are routed to I2C1 or UI2C0 automatically.
 - **System Control:** Supports remote reset, boot-to-LDROM (for ISP), LED status reporting, and firmware version reporting via USB commands.
 
 ## Project Structure
@@ -92,6 +93,34 @@ The device communicates via 1024-byte HID report packets. `[N]` refers to byte i
 | `0xdb` | **Monitor Stat** | None | Returns `[0]=0xdb, [1]=i2c_monitor_flag`. |
 | `0xdc` | **GPIO Write** | `[1]=40`: set PC14=`[2]`; `[1]=48`: set PB6=`[2]` | PC14=0 also triggers `CPLD_read()`/`CPLD_read1()`; PB6 controls the PCA9848 SMBus reset line. |
 | `0xdd` | **GPIO Read** | `[1]=40`: read PC14; `[1]=48`: read PB6 | Returns `[0]=0xdd, [1]=PinValue`. |
+| `0xe0` | **NVMe-MI Command** | `[1]=NVMe index (0-based)`, `[2]=CommandID (1..19)`, `[3..6]=Dword0 (LE)`, `[7..10]=Dword1 (LE)`. VPD Write (CmdID 8) carries data bytes from `[7]` onward. | Returns `[0]=0xe0, [1]=CommandID, [2]=Status (0=OK, 1=Fail), [3]=Data byte count`, `[4..]=raw data` (success) or null-terminated ASCII reason (fail). See below. |
+
+## NVMe-MI Command (`0xe0`)
+Executes a single NVMe-MI Management Interface command against one drive over MCTP-over-SMBus. The host tool's `NVMEMI <CommandID> <NVMEIndex>` command maps to this; the host converts its 1-based `NVMEIndex` to the 0-based `[1]` index used here.
+
+### CommandID map
+| ID | Command | ID | Command |
+| :-- | :--- | :-- | :--- |
+| 1 | Basic Management | 11 | Ctrl Health Poll |
+| 2 | Get Endpoint UUID | 12 | Health Info + Alerts |
+| 3 | Get Msg Type Support | 13 | Power Management |
+| 4 | Read MI Data Struct | 14 | FW Revision |
+| 5 | Configuration Set | 15 | Health Alerts |
+| 6 | Configuration Get | 16 | Health Info |
+| 7 | VPD Read | 17 | SMART Log |
+| 8 | VPD Write | 18 | Device Identify |
+| 9 | Reset (unsupported) | 19 | Format NVM (destructive) |
+| 10 | Health Status Poll | | |
+
+- **CommandID 1 (Basic Management)** returns the 32-byte Basic Management structure cached in `bmc_report[]` (no live bus transaction).
+- **CommandID 2..19** are live MCTP/NVMe-MI over-SMBus exchanges (`nvme_mi.c`): the firmware routes the mux, briefly reconfigures the bus as an MCTP slave (address 0x10), transmits the request, receives and reassembles the response (verifying PEC + MIC), then restores the bus for normal master use.
+
+### Dual-CPLD flat slot indexing
+The `[1]` NVMe index is a **flat, 0-based** number across both CPLD banks:
+- Slots `0 .. (bmc_report[0x30]-1)` → first CPLD's drives on **I2C1**.
+- Slots `bmc_report[0x30] ..` → second CPLD's drives on **UI2C0** (only when a second CPLD is detected, i.e. `g_u32clpd_lost == 0`; otherwise the command fails).
+
+Within each bank, `localSlot / 8` selects the PCA9848/TCA9548 mux and `localSlot % 8` the channel. `SelectNvmeSlotChannel()` performs this split and selects the bus for the following MCTP exchange.
 
 ## BMC Report Memory Map (1024 bytes)
 The `bmc_report` array (CPLD1, accessed via `0xc0`) and `bmc_report1` (CPLD2, accessed via `0xc4`) share the same layout.

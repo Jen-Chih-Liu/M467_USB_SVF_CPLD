@@ -90,6 +90,19 @@ typedef struct {
 
 } M463_BoardData_t;
 
+// m463 NVMe-MI single-command execution result (host <-> firmware 0xe0 command).
+typedef struct {
+    uint8_t command_id;   // Echoed CommandID (1..19)
+    uint8_t status;       // 0 = Success, 1 = Fail
+    uint8_t data_count;   // Number of valid raw data bytes (success only)
+    uint8_t data[256];    // Raw response bytes (success)
+    char    error[256];   // Null-terminated failure reason (fail)
+} NvmeMiResult_t;
+
+extern int usbd_multi_nvme_mi_cmd(unsigned char usb_cnt, unsigned char nvme_index,
+                                  unsigned char cmd_id, unsigned int dword0,
+                                  unsigned int dword1, const unsigned char* data,
+                                  unsigned int data_len, NvmeMiResult_t* pResult);
 
 extern int usb_read_multi_bmc(unsigned char usb_cnt, M463_BoardData_t* pBoardData);
 extern float show_temperature(uint8_t h_bytem, uint8_t l_byte);

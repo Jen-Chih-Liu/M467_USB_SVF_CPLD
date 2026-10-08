@@ -1575,6 +1575,158 @@ int usbd_multi_pass_i2c_get(unsigned char usb_cnt, unsigned char i2c_addr, unsig
 
 
 
+/**
+ * @brief Low-level: send an m463 NVMe-MI single-command (0xe0) and read the response.
+ *
+ * Request  : [0]=0xe0 [1]=NVMe index [2]=CommandID(1..19)
+ *            [3..6]=Dword0 (little-endian) [7..10]=Dword1 (little-endian)
+ * Response : [0]=0xe0 [1]=CommandID [2]=Status(0=OK,1=Fail)
+ *            [3]=Data byte count (success) [4..]=raw data / reason string
+ *
+ * @return 0 on success (transport level), -1 on USB error.
+ */
+int nvme_mi_cmd(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,
+                unsigned char nvme_index, unsigned char cmd_id,
+                unsigned int dword0, unsigned int dword1,
+                const unsigned char* data, unsigned int data_len,
+                NvmeMiResult_t* pResult) {
+    char cmd_buf[PACKET_SIZE] = { 0 };
+    cmd_buf[0] = (char)0xe0;
+    cmd_buf[1] = (char)nvme_index;
+    cmd_buf[2] = (char)cmd_id;
+    // Dword0 (little-endian) at [3..6]
+    cmd_buf[3] = (char)(dword0 & 0xFF);
+    cmd_buf[4] = (char)((dword0 >> 8) & 0xFF);
+    cmd_buf[5] = (char)((dword0 >> 16) & 0xFF);
+    cmd_buf[6] = (char)((dword0 >> 24) & 0xFF);
+    // Dword1 (little-endian) at [7..10]
+    cmd_buf[7]  = (char)(dword1 & 0xFF);
+    cmd_buf[8]  = (char)((dword1 >> 8) & 0xFF);
+    cmd_buf[9]  = (char)((dword1 >> 16) & 0xFF);
+    cmd_buf[10] = (char)((dword1 >> 24) & 0xFF);
+
+    // Optional write payload (e.g. VPD Write, CmdID 8):
+    //   cmd_buf[11] = data byte count, cmd_buf[12..] = data bytes.
+    if (data != NULL && data_len > 0u) {
+        unsigned int n = data_len;
+        if (n > 180u) n = 180u;
+        if ((int)(12u + n) > PACKET_SIZE) n = (unsigned int)(PACKET_SIZE - 12);
+        cmd_buf[11] = (char)n;
+        for (unsigned int i = 0; i < n; i++)
+            cmd_buf[12 + i] = (char)data[i];
+    }
+
+    int actual_length = 0;
+    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_buf, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    if (r < 0) {
+        fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
+        return -1;
+    }
+
+    // Prepare response buffer
+    unsigned char in_data[transfer_size] = { 0 };
+    actual_length = 0;
+
+    /* NVMe-MI commands 2..19 run a real MCTP/SMBus exchange in firmware
+     * (send request packets, wait for the drive's reply, and on no-reply also
+     * run an internal RX timeout + packet-drain). This can take well over one
+     * second, so allow a generous read timeout here; a stale 1 s value made
+     * VPD Read / Config Get return LIBUSB_ERROR_TIMEOUT before the firmware
+     * had finished and sent its USB response.
+     *
+     * Slow commands need even more headroom: Reset (CmdID 9) and Format NVM
+     * (CmdID 19) retry the MCTP receive multiple times in firmware (each retry
+     * is a full RX-timeout window of ~1-2 s), so a 5 s host timeout would give
+     * up before the firmware replied. Use 60 s so these long operations can
+     * finish and report their real status instead of a USB timeout. */
+    int r_in = libusb_interrupt_transfer(handle, ep_in, in_data, sizeof(in_data), &actual_length, 60000);
+    if (r_in != 0) {
+        fprintf(stderr, "Error reading from device: %s\n", libusb_error_name(r_in));
+        return -1;
+    }
+
+    if (actual_length < 4) {
+        fprintf(stderr, "Response too short\n");
+        return -1;
+    }
+
+    pResult->command_id = in_data[1];
+    pResult->status     = in_data[2];
+    pResult->data_count = in_data[3];
+
+    if (pResult->status == 0x00) {
+        int n = pResult->data_count;
+        if (n > (int)sizeof(pResult->data)) n = (int)sizeof(pResult->data);
+        for (int i = 0; i < n; i++) pResult->data[i] = in_data[4 + i];
+        pResult->data_count = (uint8_t)n;
+        pResult->error[0] = '\0';
+    }
+    else {
+        int i;
+        for (i = 0; i < (int)sizeof(pResult->error) - 1 && in_data[4 + i] != 0; i++)
+            pResult->error[i] = (char)in_data[4 + i];
+        pResult->error[i] = '\0';
+        pResult->data_count = 0;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Logical wrapper: run one m463 NVMe-MI command on a specific USB device.
+ *
+ * @param usb_cnt     Logical USB device index.
+ * @param nvme_index  Target NVMe drive slot (0-based).
+ * @param cmd_id      CommandID (1..19).
+ * @param dword0      NVMe-MI Management Request Dword0 (0 if unused).
+ * @param dword1      NVMe-MI Management Request Dword1 (0 if unused).
+ * @param pResult     Output result structure.
+ * @return int 0 on success, 1 on failure.
+ */
+int usbd_multi_nvme_mi_cmd(unsigned char usb_cnt, unsigned char nvme_index,
+                           unsigned char cmd_id, unsigned int dword0,
+                           unsigned int dword1, const unsigned char* data,
+                           unsigned int data_len, NvmeMiResult_t* pResult)
+{
+    libusb_context* ctx = NULL;
+    libusb_device** devs;
+    libusb_device_handle* handle = NULL;
+    uint8_t ep_out = 0, ep_in = 0;
+    int r;
+
+    r = libusb_init(&ctx);
+    if (r < 0) return 1;
+
+    ssize_t cnt = libusb_get_device_list(ctx, &devs);
+    if (cnt < 0) {
+        libusb_exit(ctx);
+        return 1;
+    }
+
+    scan_and_update_map(ctx, devs, cnt);
+
+    libusb_free_device_list(devs, 1);
+
+    if (g_device_count == 0) {
+        libusb_exit(ctx);
+        return 1;
+    }
+    r = -1;
+    if (g_device_count > usb_cnt)
+    {
+        if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
+            r = nvme_mi_cmd(handle, ep_out, ep_in, nvme_index, cmd_id, dword0, dword1, data, data_len, pResult);
+            libusb_release_interface(handle, INTERFACE_NUMBER);
+            libusb_close(handle);
+        }
+    }
+
+    clear_map();
+
+    libusb_exit(ctx);
+    return (r == 0) ? 0 : 1;
+}
+
 int usbd_multi_pass_i2c_get1(unsigned char usb_cnt, unsigned char i2c_addr, unsigned char i2c_reg, unsigned char i2c_len, unsigned char* i2c_array)
 {
     libusb_context* ctx = NULL;

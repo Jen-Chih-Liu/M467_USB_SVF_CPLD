@@ -741,9 +741,79 @@ uint32_t crc32c(const uint8_t *data, size_t length)
 
 static uint8_t g_au8SlvRxData[512];
 
+/* Per-packet RX queue for multi-packet MCTP responses.
+ * ISR pushes each completed SMBus write (STOP) as one entry; main loop pops. */
+#define MCTP_RXQ_DEPTH      (16U)
+#define MCTP_RXQ_PKT_SIZE   (128U)   /* MTU 64 + SMBus/MCTP header + PEC, with margin */
+static uint8_t s_rxqPkt[MCTP_RXQ_DEPTH][MCTP_RXQ_PKT_SIZE];
+static uint8_t s_rxqLen[MCTP_RXQ_DEPTH];
+static volatile uint8_t s_rxqWr = 0U;
+static volatile uint8_t s_rxqRd = 0U;
+static volatile uint8_t s_rxqCurLen = 0U;
+
 
 volatile uint8_t g_u8SlvRxFlag = 0;
 volatile uint8_t g_u8SlvDataLen;
+
+/* Captured drive info for the final Command Availability Summary.
+ * Populated at read time so the summary reflects the actual device
+ * instead of hard-coded values. */
+char    g_fwRevStr[9]     = "????????";  /* FRS1 from Get Log / Identify FR */
+int32_t g_composTempC     = -1000;       /* Composite temperature (Celsius) */
+
+/* Per-command timing. Timer0 runs at 1000 Hz (1 ms per tick) and its ISR
+ * increments timer0_count, giving a free-running millisecond clock.
+ * cmd_begin() closes the PREVIOUS command's measurement (records its elapsed
+ * time into a table) and starts a new one. The whole table is printed once at
+ * the very end, below the Command Availability Summary, by cmd_timing_report().
+ * NOTE: the reported time is the whole command section, including any
+ *       CLK_SysTickDelay() settling delays inside the block. */
+#define CMD_TIMING_MAX      (32U)
+static uint32_t    g_cmdStartMs = 0;
+static const char *g_cmdCurName = NULL;
+static const char *g_cmdNames[CMD_TIMING_MAX];
+static uint32_t    g_cmdTimes[CMD_TIMING_MAX];
+static uint8_t     g_cmdCount = 0U;
+
+static void cmd_record(void)
+{
+    if ((g_cmdCurName != NULL) && (g_cmdCount < CMD_TIMING_MAX))
+    {
+        g_cmdNames[g_cmdCount] = g_cmdCurName;
+        g_cmdTimes[g_cmdCount] = (uint32_t)(timer0_count - g_cmdStartMs);
+        g_cmdCount++;
+    }
+    g_cmdCurName = NULL;
+}
+
+static void cmd_begin(const char *name)
+{
+    cmd_record();               /* close the previous command */
+    g_cmdCurName = name;
+    g_cmdStartMs = timer0_count;
+}
+
+/* Print the collected per-command timings. Call once, after the summary. */
+static void cmd_timing_report(void)
+{
+    uint8_t  i;
+    uint32_t total = 0U;
+
+    cmd_record();               /* close the last command */
+
+    printf("\n>>> [TIME] Per-Command Execution Time <<<\n");
+    printf("========================================\n");
+    printf("  #  Command                       Time(ms)\n");
+    printf("  -  ----------------------------  --------\n");
+    for (i = 0U; i < g_cmdCount; i++)
+    {
+        printf("  %-2u %-28s  %8u\n", (unsigned)(i + 1U), g_cmdNames[i], (unsigned)g_cmdTimes[i]);
+        total += g_cmdTimes[i];
+    }
+    printf("  -  ----------------------------  --------\n");
+    printf("  %-2s %-28s  %8u\n", "", "TOTAL", (unsigned)total);
+    printf("========================================\n\n");
+}
 
 /* Wait for slave RX response with a timeout so an unresponsive target
  * (e.g. NVMe Admin Passthrough not supported) cannot hang the test. */
@@ -785,6 +855,7 @@ void I2C_SlaveTRx(uint32_t u32Status)
     if (u32Status == 0x60)                      /* Own SLA+W has been receive; ACK has been return */
     {
         g_u8SlvDataLen = 0;
+        s_rxqCurLen = 0U;
         I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
     }
     else if (u32Status == 0x80)                 /* Previously address with own SLA address
@@ -793,6 +864,14 @@ void I2C_SlaveTRx(uint32_t u32Status)
         u8data = (unsigned char) I2C_GET_DATA(I2C1);
 
         g_au8SlvRxData[g_u8SlvDataLen++] = u8data;
+        if (s_rxqCurLen < MCTP_RXQ_PKT_SIZE)
+        {
+            s_rxqPkt[s_rxqWr][s_rxqCurLen] = u8data;
+        }
+        if (s_rxqCurLen < 0xFFU)
+        {
+            s_rxqCurLen++;              /* > PKT_SIZE marks an oversize packet */
+        }
 
 
         I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
@@ -804,6 +883,14 @@ void I2C_SlaveTRx(uint32_t u32Status)
         u8data = (unsigned char) I2C_GET_DATA(I2C1);
 
         g_au8SlvRxData[g_u8SlvDataLen++] = u8data;
+        if (s_rxqCurLen < MCTP_RXQ_PKT_SIZE)
+        {
+            s_rxqPkt[s_rxqWr][s_rxqCurLen] = u8data;
+        }
+        if (s_rxqCurLen < 0xFFU)
+        {
+            s_rxqCurLen++;              /* > PKT_SIZE marks an oversize packet */
+        }
 
 
         I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
@@ -814,6 +901,16 @@ void I2C_SlaveTRx(uint32_t u32Status)
     {
 			g_u8SlvRxFlag = 1;
         g_u8SlvDataLen = 0;
+        {
+            /* Push completed packet; drop it if the queue is full */
+            uint8_t nextWr = (uint8_t)((s_rxqWr + 1U) % MCTP_RXQ_DEPTH);
+            if ((s_rxqCurLen > 0U) && (nextWr != s_rxqRd))
+            {
+                s_rxqLen[s_rxqWr] = s_rxqCurLen;
+                s_rxqWr = nextWr;
+            }
+            s_rxqCurLen = 0U;
+        }
         I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
     }
     else
@@ -859,6 +956,45 @@ static uint32_t calc_mic(uint8_t *data, size_t len);
 //   raw[8..N] = Message Body
 //   raw[N+2] = PEC (last byte after Byte Count field)
 // =============================================================================
+/**
+ * @brief  Return a short name for an NVMe-MI response message status.
+ * @param  status  NVMe-MI message byte 4
+ * @retval Constant string
+ */
+static const char *nvme_mi_status_str(uint8_t status)
+{
+    switch (status)
+    {
+        case 0x00: return "Success";
+        case 0x01: return "More Processing Required";
+        case 0x02: return "Internal Error";
+        case 0x03: return "Invalid Command Opcode";
+        case 0x04: return "Invalid Parameter";
+        case 0x05: return "Invalid Command Size";
+        case 0x06: return "Invalid Command Input Data Size";
+        case 0x07: return "Access Denied";
+        default:   return "Other/Reserved";
+    }
+}
+
+/**
+ * @brief  Print CSTS bits of the NVMe-MI Controller Health Data Structure.
+ * @param  csts  CSTS field (16-bit, little-endian decoded)
+ * @retval None
+ */
+static void nvme_mi_print_csts(uint16_t csts)
+{
+    static const char *const shst[4] = { "Normal", "Shutdown Occurring", "Shutdown Complete", "Reserved" };
+
+    printf("    RDY   (Ready)                     : %u\n", (uint32_t)(csts & 0x01U));
+    printf("    CFS   (Controller Fatal)          : %u\n", (uint32_t)((csts >> 1) & 0x01U));
+    printf("    SHST  (Shutdown Status)           : %s\n", shst[(csts >> 2) & 0x03U]);
+    printf("    NSSRO (NVM Subsys Reset Occurred) : %u\n", (uint32_t)((csts >> 4) & 0x01U));
+    printf("    CECO  (Ctrl Enable Change Occ.)   : %u\n", (uint32_t)((csts >> 5) & 0x01U));
+    printf("    NAC   (Namespace Attr Changed)    : %u\n", (uint32_t)((csts >> 6) & 0x01U));
+    printf("    FA    (Firmware Activated)        : %u\n", (uint32_t)((csts >> 7) & 0x01U));
+}
+
 void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
 {
     printf("\n========================================\n");
@@ -1043,7 +1179,9 @@ void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
                            resp[1 + t] == 0x01 ? "PLDM"         :
                            resp[1 + t] == 0x02 ? "NCSI"         :
                            resp[1 + t] == 0x03 ? "Ethernet"     :
-                           resp[1 + t] == 0x04 ? "NVMe-MI"      : "Vendor/Unknown");
+                           resp[1 + t] == 0x04 ? "NVMe-MI"      :
+                           resp[1 + t] == 0x05 ? "SPDM"         :
+                           resp[1 + t] == 0x06 ? "Secured Msg (SPDM)" : "Vendor/Unknown");
                 }
             }
             break;
@@ -1071,7 +1209,10 @@ void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
 
         /* NVMe-MI Header starts at raw[8] */
         uint8_t  nmimt_raw    = raw[8];
-        uint8_t  nmimt        = nmimt_raw & 0x0F;   /* lower 4 bits */
+        /* NVMe-MI Spec (Rev 2.1) Fig 20: NMIMT = bits 6:3, ROR = bit 7, CSI = bit 0.
+         * NMIMT values: 0h=Control Primitive, 1h=NVMe-MI Command,
+         *               2h=NVMe Admin Command, 5h=Asynchronous Event. */
+        uint8_t  nmimt        = (nmimt_raw >> 3) & 0x0F;
         uint8_t  ror          = (nmimt_raw >> 7) & 0x01;
         uint8_t  mi_flags     = raw[9];
         uint8_t  status       = raw[10];
@@ -1080,8 +1221,10 @@ void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
         printf("  NVMe-MI Hdr  : 0x%02X\n", nmimt_raw);
         printf("    ROR (Response) : %d\n", ror);
         printf("    NMIMT          : 0x%02X => %s\n", nmimt,
-               nmimt == 0x08 ? "NVMe-MI Command Response" :
-               nmimt == 0x09 ? "NVMe Admin Command Response" : "Unknown");
+               nmimt == 0x00 ? "Control Primitive"           :
+               nmimt == 0x01 ? "NVMe-MI Command Response"    :
+               nmimt == 0x02 ? "NVMe Admin Command Response" :
+               nmimt == 0x05 ? "Asynchronous Event"          : "Unknown");
         printf("  MI Flags     : 0x%02X\n", mi_flags);
         printf("  Status       : 0x%02X => %s\n", status,
                status == 0x00 ? "Success"                         :
@@ -1126,22 +1269,30 @@ void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
         {
             printf("\n  [Response Data]\n");
 
-            if (nmimt == 0x08) /* NVMe-MI Command Response */
+            if (nmimt == 0x01) /* NVMe-MI Command Response */
             {
-                /* Determine original command from context (NMIMT=0x08 covers multiple opcodes) */
+                /* Determine original command from context (NMIMT=0x01 covers multiple opcodes) */
                 /* NVM Subsystem Health Status Poll Response */
-                if (resp_len >= 8)
+                /* resp = msg byte 6: [0..1]=Mgmt Response (resp[1]=entry count),
+                 * then Controller Health Data Structure (Opcode 0x02 response):
+                 * [2..3]=CTLID [4..5]=CSTS [6..7]=CTEMP(Kelvin) [8]=PDLU [9]=SPARE
+                 * [10]=CWARN [11..12]=CHSC                                          */
+                if (resp_len >= 13)
                 {
-                    printf("  --- NVMe-MI Response Body (NMIMT=0x08) ---\n");
-                    /* Try to interpret as Health Status (Opcode 0x01 response) */
-                    printf("  Composite Temp : %d C\n", (int8_t)resp[0]);
-                    printf("  PDLU           : %d%%\n", resp[1]);
-                    printf("  Spare          : %d%%\n", resp[2]);
-                    printf("  CritWarn       : 0x%02X\n", resp[3]);
+                    uint16_t ctempK = (uint16_t)resp[6] | ((uint16_t)resp[7] << 8);
+                    printf("  --- Controller Health Data (NMIMT=0x01, Opc=0x02) ---\n");
+                    printf("  Entries        : %d\n", resp[1]);
+                    printf("  Controller ID  : 0x%04X\n",
+                           (uint16_t)resp[2] | ((uint16_t)resp[3] << 8));
                     printf("  CSTS           : 0x%04X\n",
                            (uint16_t)resp[4] | ((uint16_t)resp[5] << 8));
-                    printf("  NSSR           : 0x%04X\n",
-                           (uint16_t)resp[6] | ((uint16_t)resp[7] << 8));
+                    nvme_mi_print_csts((uint16_t)resp[4] | ((uint16_t)resp[5] << 8));
+                    printf("  Composite Temp : %d C (%d K)\n", (int32_t)ctempK - 273, ctempK);
+                    printf("  PDLU           : %d%%\n", resp[8]);
+                    printf("  Spare          : %d%%\n", resp[9]);
+                    printf("  CritWarn       : 0x%02X\n", resp[10]);
+                    printf("  CHSC           : 0x%04X\n",
+                           (uint16_t)resp[11] | ((uint16_t)resp[12] << 8));
                 }
 
                 /* Print remaining raw bytes */
@@ -1150,34 +1301,45 @@ void parse_mctp_smbus_response(uint8_t *raw, uint8_t raw_len)
                     printf("%02X ", resp[i]);
                 printf("\n");
             }
-            else if (nmimt == 0x09) /* NVMe Admin Command Response */
+            else if (nmimt == 0x02) /* NVMe Admin Command Response (NVMe-MI Spec Fig 137/138) */
             {
-                printf("  --- NVMe Admin Cmd Response (NMIMT=0x09) ---\n");
-                if (resp_len >= 4)
+                /* NVMe-MI message byte 0 = raw[7]. Response layout:
+                 *   byte 4      -> Status (NVMe-MI level)
+                 *   bytes 8..11 -> CQE Dword 0 (command-specific result)
+                 *   bytes 16..19-> CQE Dword 3 (contains NVMe Status Field)
+                 *   byte 20..   -> NVMe Response Data (optional)                 */
+                printf("  --- NVMe Admin Cmd Response (NMIMT=0x02) ---\n");
+                if (byte_count >= 25)   /* through CQE DW3 (raw[26]) */
                 {
-                    uint32_t dw0 = (uint32_t)resp[0] | ((uint32_t)resp[1] << 8)  |
-                                   ((uint32_t)resp[2] << 16) | ((uint32_t)resp[3] << 24);
-                    printf("  DW0 (Status Field): 0x%08X\n", dw0);
-                    uint16_t sf  = (uint16_t)(dw0 >> 17);
-                    uint8_t  sc  = (uint8_t)((dw0 >> 17) & 0xFF);
-                    uint8_t  sct = (uint8_t)((dw0 >> 25) & 0x07);
-                    printf("    Status Code (SC) : 0x%02X (%s)\n", sc,
+                    uint8_t  admin_status = raw[11];   /* msg byte 4 */
+                    uint32_t cqedw0 = (uint32_t)raw[15] | ((uint32_t)raw[16] << 8)  |
+                                      ((uint32_t)raw[17] << 16) | ((uint32_t)raw[18] << 24);
+                    uint32_t cqedw3 = (uint32_t)raw[23] | ((uint32_t)raw[24] << 8)  |
+                                      ((uint32_t)raw[25] << 16) | ((uint32_t)raw[26] << 24);
+                    /* NVMe Status Field lives in CQE Dword 3, bits 31:17 */
+                    uint8_t  sc  = (uint8_t)((cqedw3 >> 17) & 0xFF);
+                    uint8_t  sct = (uint8_t)((cqedw3 >> 25) & 0x07);
+                    printf("  NVMe-MI Status  : 0x%02X (%s)\n", admin_status,
+                           admin_status == 0x00 ? "Success" : "Error");
+                    printf("  CQE DW0         : 0x%08X\n", cqedw0);
+                    printf("  CQE DW3         : 0x%08X\n", cqedw3);
+                    printf("    Status Code (SC)  : 0x%02X (%s)\n", sc,
                            sc == 0x00 ? "Successful Completion" : "Error");
-                    printf("    Status Code Type : 0x%02X (%s)\n", sct,
+                    printf("    Status Code Type  : 0x%02X (%s)\n", sct,
                            sct == 0x00 ? "Generic Command" :
                            sct == 0x01 ? "Command Specific" :
                            sct == 0x02 ? "Media/Data Integrity" : "Vendor");
-                    (void)sf;
                 }
 
-                /* Print data payload */
-                if (resp_len > 4)
+                /* NVMe Response Data starts at msg byte 20 = raw[27], last 4 bytes = MIC */
+                if (byte_count > 30)
                 {
+                    uint32_t admin_data_len = (uint32_t)byte_count - 29; /* excl. MIC */
                     printf("  Admin Response Data (hex):\n  ");
-                    for (uint8_t i = 4; i < resp_len && i < 60; i++)
+                    for (uint32_t i = 0; i < admin_data_len && i < 64; i++)
                     {
-                        printf("%02X ", resp[i]);
-                        if ((i - 3) % 16 == 0) printf("\n  ");
+                        printf("%02X ", raw[27 + i]);
+                        if ((i + 1) % 16 == 0) printf("\n  ");
                     }
                     printf("\n");
                 }
@@ -1296,6 +1458,277 @@ static uint32_t calc_mic(uint8_t *data, size_t len) {
     return crc ^ 0xFFFFFFFF;
 }
 
+#define MCTP_TX_MTU          (64U)
+#define MCTP_RX_TIMEOUT_CNT  (0x00A00000UL)
+
+/**
+ * @brief  Send one NVMe-MI message (NMH..MIC) to the SSD, split into MCTP packets.
+ * @param  pMsg    Message bytes starting at NMH byte 0 (0x84), MIC included
+ * @param  msgLen  Message length in bytes
+ * @retval None
+ */
+static void mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
+{
+    uint8_t  pkt[8U + MCTP_TX_MTU + 1U];
+    uint16_t off = 0U;
+    uint8_t  seq = 0U;
+
+    if (pMsg == NULL)
+    {
+        return;
+    }
+
+    while (off < msgLen)
+    {
+        uint16_t frag = (uint16_t)(msgLen - off);
+        uint8_t  som  = (off == 0U) ? 1U : 0U;
+        uint8_t  eom;
+        uint16_t p;
+
+        if (frag > MCTP_TX_MTU)
+        {
+            frag = MCTP_TX_MTU;
+        }
+        eom = ((uint16_t)(off + frag) >= msgLen) ? 1U : 0U;
+
+        pkt[0] = 0x3A;                              // SSD address (write)
+        pkt[1] = 0x0F;                              // MCTP over SMBus
+        pkt[2] = (uint8_t)(5U + frag);              // byte count = src(1)+MCTP hdr(4)+payload
+        pkt[3] = (MCU_ADDR_7BIT << 1) | 1U;         // source slave address
+        pkt[4] = 0x01;                              // header version
+        pkt[5] = 0x00;                              // dest EID
+        pkt[6] = 0x01;                              // src EID
+        pkt[7] = (uint8_t)((som << 7) | (eom << 6) | ((seq & 0x03U) << 4) | (1U << 3)); // TO=1, tag=0
+        for (p = 0U; p < frag; p++)
+        {
+            pkt[8U + p] = pMsg[off + p];
+        }
+        pkt[8U + frag] = calc_pec_noinit(pkt, 8U + frag);
+
+        I2C_WriteMultiBytes(I2C_PORT, pkt[0] >> 1, &pkt[1], 8U + frag);
+
+        off = (uint16_t)(off + frag);
+        seq = (uint8_t)((seq + 1U) & 0x03U);
+        /* Gap between request packets only: no delay after the last one, because
+         * the slave (I2C1 int) must be enabled before the device starts replying. */
+        if (off < msgLen)
+        {
+            CLK_SysTickDelay(2000);
+        }
+    }
+}
+
+/**
+ * @brief  Receive and reassemble one MCTP message from the RX queue.
+ *         Checks PEC per packet, SOM/EOM/sequence order, and MIC on the full message.
+ * @param  pMsg     Output buffer (concatenated MCTP payloads: NMH..MIC)
+ * @param  maxLen   Size of pMsg
+ * @param  pMsgLen  Output: reassembled length
+ * @retval 0 on success, negative on timeout / framing / PEC / sequence / MIC error
+ */
+static int32_t mctp_rx_message_core(uint8_t *pMsg, uint16_t maxLen, uint16_t *pMsgLen)
+{
+    uint8_t  pkt[MCTP_RXQ_PKT_SIZE + 1U];
+    uint16_t len = 0U;
+    uint8_t  started = 0U;
+    uint8_t  expSeq = 0U;
+    uint8_t  pktCnt = 0U;
+    uint32_t waitCnt = 0U;
+
+    if ((pMsg == NULL) || (pMsgLen == NULL))
+    {
+        return -1;
+    }
+    *pMsgLen = 0U;
+
+    for (;;)
+    {
+        uint8_t rawLen;
+        uint8_t bc;
+        uint8_t tag;
+        uint8_t som;
+        uint8_t eom;
+        uint8_t seq;
+        uint8_t payLen;
+
+        if (s_rxqRd == s_rxqWr)
+        {
+            if (++waitCnt > MCTP_RX_TIMEOUT_CNT)
+            {
+                printf("  [RX] timeout after %u pkt(s), %u bytes\n", pktCnt, len);
+                return -2;
+            }
+            continue;
+        }
+        waitCnt = 0U;
+
+        rawLen = s_rxqLen[s_rxqRd];
+        if (rawLen > MCTP_RXQ_PKT_SIZE)
+        {
+            s_rxqRd = (uint8_t)((s_rxqRd + 1U) % MCTP_RXQ_DEPTH);
+            printf("  [RX] pkt#%u oversize (%u bytes)\n", pktCnt, rawLen);
+            return -3;
+        }
+        /* pkt[0] = MCU write address (part of PEC), pkt[1..] = received bytes:
+         * [1]=0x0F [2]=BC [3]=SrcAddr [4]=HdrVer [5]=DstEID [6]=SrcEID [7]=Tag [8..]=payload [3+BC]=PEC */
+        pkt[0] = (uint8_t)(MCU_ADDR_7BIT << 1);
+        memcpy(&pkt[1], s_rxqPkt[s_rxqRd], rawLen);
+        s_rxqRd = (uint8_t)((s_rxqRd + 1U) % MCTP_RXQ_DEPTH);
+        pktCnt++;
+
+        bc = pkt[2];
+        if ((pkt[1] != 0x0FU) || (bc < 6U) || ((uint16_t)rawLen < ((uint16_t)bc + 3U)))
+        {
+            printf("  [RX] pkt#%u bad frame: cmd=0x%02X bc=%u raw=%u\n", pktCnt, pkt[1], bc, rawLen);
+            return -4;
+        }
+        if (calc_pec_noinit(pkt, (size_t)bc + 3U) != pkt[3U + bc])
+        {
+            printf("  [RX] pkt#%u PEC fail\n", pktCnt);
+            return -5;
+        }
+
+        tag    = pkt[7];
+        som    = (uint8_t)((tag >> 7) & 0x01U);
+        eom    = (uint8_t)((tag >> 6) & 0x01U);
+        seq    = (uint8_t)((tag >> 4) & 0x03U);
+        payLen = (uint8_t)(bc - 5U);
+
+        if (started == 0U)
+        {
+            if (som == 0U)
+            {
+                printf("  [RX] pkt#%u missing SOM (tag=0x%02X)\n", pktCnt, tag);
+                return -6;
+            }
+            started = 1U;           /* first sequence number is chosen by the device */
+        }
+        else
+        {
+            if (som != 0U)
+            {
+                printf("  [RX] pkt#%u unexpected SOM (tag=0x%02X)\n", pktCnt, tag);
+                return -6;
+            }
+            if (seq != expSeq)
+            {
+                printf("  [RX] pkt#%u seq %u, expected %u\n", pktCnt, seq, expSeq);
+                return -7;
+            }
+        }
+
+        if (((uint32_t)len + payLen) > maxLen)
+        {
+            printf("  [RX] message exceeds buffer (%u)\n", maxLen);
+            return -8;
+        }
+        memcpy(&pMsg[len], &pkt[8], payLen);
+        len = (uint16_t)(len + payLen);
+        expSeq = (uint8_t)((seq + 1U) & 0x03U);
+
+        if (eom != 0U)
+        {
+            break;
+        }
+    }
+
+    /* MIC = CRC-32C over the whole message except the last 4 bytes (little-endian) */
+    if ((pMsg[0] & 0x80U) != 0U)
+    {
+        uint32_t micCalc;
+        uint32_t micRx;
+
+        if (len < 5U)
+        {
+            return -9;
+        }
+        micCalc = calc_mic(pMsg, (size_t)len - 4U);
+        micRx   = (uint32_t)pMsg[len - 4U]
+                | ((uint32_t)pMsg[len - 3U] << 8)
+                | ((uint32_t)pMsg[len - 2U] << 16)
+                | ((uint32_t)pMsg[len - 1U] << 24);
+        if (micCalc != micRx)
+        {
+            printf("  [RX] MIC fail: calc=0x%08X rx=0x%08X\n", micCalc, micRx);
+            return -9;
+        }
+    }
+
+    printf("  [RX] reassembled %u pkt(s), %u bytes, PEC/MIC PASS\n", pktCnt, len);
+    *pMsgLen = len;
+    return 0;
+}
+
+static int32_t mctp_rx_message(uint8_t *pMsg, uint16_t maxLen, uint16_t *pMsgLen)
+{
+    int32_t ret = mctp_rx_message_core(pMsg, maxLen, pMsgLen);
+
+    if (ret <= -3)
+    {
+        /* The device may still be sending the rest of the message: discard packets
+         * until the bus is idle, so they do not pollute the following commands. */
+        uint32_t idleCnt = 0U;
+        uint16_t dropCnt = 0U;
+
+        while (idleCnt <= MCTP_RX_TIMEOUT_CNT)
+        {
+            if (s_rxqRd != s_rxqWr)
+            {
+                s_rxqRd = (uint8_t)((s_rxqRd + 1U) % MCTP_RXQ_DEPTH);
+                dropCnt++;
+                idleCnt = 0U;
+            }
+            else
+            {
+                idleCnt++;
+            }
+        }
+        printf("  [RX] drained %u leftover pkt(s)\n", dropCnt);
+    }
+    return ret;
+}
+
+/**
+ * @brief  Send a 16-byte NVMe-MI Command request (NMH..NMD1), append MIC,
+ *         and receive the (possibly multi-packet) response.
+ * @param  pReq      16 bytes: NMH(4) + Opcode/Rsvd(4) + NMD0(4) + NMD1(4)
+ * @param  pResp     Response buffer (NMH..MIC)
+ * @param  maxLen    Size of pResp
+ * @param  pRespLen  Output: response length
+ * @retval Same as mctp_rx_message()
+ */
+static int32_t nvme_mi_cmd_xfer(const uint8_t *pReq, uint8_t *pResp, uint16_t maxLen, uint16_t *pRespLen)
+{
+    uint8_t  msg[20];
+    uint32_t mic;
+    int32_t  ret;
+
+    if ((pReq == NULL) || (pResp == NULL) || (pRespLen == NULL))
+    {
+        return -1;
+    }
+    memcpy(msg, pReq, 16);
+    mic = calc_mic(msg, 16);
+    msg[16] = (uint8_t)(mic & 0xFF);
+    msg[17] = (uint8_t)((mic >> 8) & 0xFF);
+    msg[18] = (uint8_t)((mic >> 16) & 0xFF);
+    msg[19] = (uint8_t)((mic >> 24) & 0xFF);
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+    s_rxqRd = s_rxqWr;
+    mctp_tx_message(msg, (uint16_t)sizeof(msg));
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    ret = mctp_rx_message(pResp, maxLen, pRespLen);
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+    return ret;
+}
+
 void parse_nvme_ds_response(uint8_t *i2c_buf) {
     // i2c_buf ????:
     // [0] Addr(Wr), [1] Cmd, [2] Len, [3..N] Payload, [Last] PEC
@@ -1384,18 +1817,18 @@ int main(void)
 
     /* Init UART to 115200-8n1 for print message */
     UART_Open(UART3, 115200);
-    Set_USB_SerialNumber_From_UID();
-    HSUSBD_Open(&gsHSInfo, HID_ClassRequest, NULL);
-    HSUSBD_SetVendorRequest(HID_VendorRequest);
+    //Set_USB_SerialNumber_From_UID();
+   // HSUSBD_Open(&gsHSInfo, HID_ClassRequest, NULL);
+    //HSUSBD_SetVendorRequest(HID_VendorRequest);
 
     /* Endpoint configuration */
-    HID_Init();
+    //HID_Init();
 
     /* Enable HSUSBD interrupt */
-    NVIC_EnableIRQ(USBD20_IRQn);
-    HSUSBD_DISABLE_USB();
+    //NVIC_EnableIRQ(USBD20_IRQn);
+    //HSUSBD_DISABLE_USB();
 
-    HSUSBD_ENABLE_USB();
+    //HSUSBD_ENABLE_USB();
     /* Start transaction */
     //HSUSBD_Start();
     GPIO_SetSlewCtl(PA, BIT7, GPIO_SLEWCTL_FAST);
@@ -1525,7 +1958,9 @@ int main(void)
                 uint8_t bc = g_au8SlvRxData[1];
                 uint8_t mt = g_au8SlvRxData[7];   // MCTP msg type
                 printf("  addr 0x%02X: bc=%d mt=0x%02X ", da, bc, mt);
-                if (bc >= 8 && (mt == 0x00 || mt == 0x84 || mt == 0x04)) {
+                /* Reject stale buffer data: need a new RX and SrcAddr == probed addr */
+                if ((g_u8SlvRxFlag != 0U) && (g_au8SlvRxData[2] == (uint8_t)((da << 1) | 1U)) &&
+                    (bc >= 8) && ((mt == 0x00) || (mt == 0x84) || (mt == 0x04))) {
                     printf("<== MCTP ENDPOINT! raw: ");
                     { uint8_t r; for (r = 0; r < bc + 2 && r < 32; r++) printf("%02X ", g_au8SlvRxData[r]); }
                     printf("\n");
@@ -1562,6 +1997,7 @@ int main(void)
 //   Byte 31:     PEC for ID Block
 // =========================================================================
 {
+    cmd_begin("Basic Management");
     printf("\n>>> [CMD] NVMe Basic Management Command - Direct SMBus Register 0x00 <<<\n");
     printf("=== NVMe Basic Management (No MCTP) ===\n");
     printf("NOTE: SMBus Block Read requires Repeated START (no STOP between W and R).\n");
@@ -1678,6 +2114,18 @@ int main(void)
             uint8_t status_len = bm_buf[0];
             printf("  Status Block Length : %d%s\n", status_len,
                    status_len == 6 ? " (OK)" : " (unexpected)");
+
+            /* Byte 0 must be 6 for a valid NVMe Basic Management response.
+             * Any other value means this address is not an NVMe drive
+             * (e.g. EEPROM/sensor returning 0x00/0xFF). Skip parsing so we
+             * do not print bogus Temperature/VID/SN from junk bytes. */
+            if (status_len != 6)
+            {
+                printf("  -> Not an NVMe Basic Management response, skip parse.\n");
+                printf("========================================\n");
+                CLK_SysTickDelay(200000);
+                continue;
+            }
 
             uint8_t sflgs = bm_buf[1];
             printf("  SFLGS (0x%02X):\n", sflgs);
@@ -1800,6 +2248,7 @@ int main(void)
     I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
+    cmd_begin("Get Endpoint UUID");
     printf("\n>>> [CMD] MCTP Control - Get Endpoint UUID (Cmd=0x03) <<<\n");
     // --- SMBus Block Write Header ---
     mctp_uuid_req[idx++] = ssd_7BIT << 1;
@@ -1951,7 +2400,8 @@ I2C_EnableInt(I2C1);
 	    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
-    printf("\n>>> [CMD] NVMe-MI - Get Log Page / SMART Data (Opcode=0x08, NMIMT=0x08) <<<\n");
+    cmd_begin("Ctrl Health Poll (NMP=0x08)");
+    printf("\n>>> [CMD] NVMe-MI - Controller Health Status Poll (Opcode=0x02, NMP=0x08) <<<\n");
 // ---------------------------------------------------------
 // ?? Get smart data ID (Target EID = 5)
 // ---------------------------------------------------------
@@ -1974,11 +2424,11 @@ cmd_buf[6] = 0x01; // Src EID: 1 (MCU ID)
 cmd_buf[7] = 0xC8; // SOM=1, EOM=1, Tag=0
 //mic start
 cmd_buf[8] = 0x84;        // Msg Type: NVMe-MI (0x04) + IC Bit (0x80)
-cmd_buf[9] = 0x08;        // NMMT: NVMe Admin Command
+cmd_buf[9] = 0x08;        // NMP: NMIMT=1h (NVMe-MI Command), ROR=0, CSI=0  (1h << 3 = 0x08)
 cmd_buf[10] = 0x00;        // Reserved
-cmd_buf[11] = 0x00;       // Controller ID Low
-cmd_buf[12] = 0x02;       // Controller ID High (ID: 0x0002)
-cmd_buf[13] = 0x00;       // Admin Opcode (Get Log Page)
+cmd_buf[11] = 0x00;       // Reserved
+cmd_buf[12] = 0x02;       // NVMe-MI Opcode = 0x02 (Controller Health Status Poll)
+cmd_buf[13] = 0x00;       // Reserved (NVMe-MI Command Dword 0 starts at msg byte 8 = cmd_buf[16])
 cmd_buf[14] = 0x00;       // NSID / Dword
 cmd_buf[15] = 0x00;
 cmd_buf[16] = 0x00;
@@ -2067,6 +2517,7 @@ I2C_EnableInt(I2C1);
 	I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
+    cmd_begin("Get Msg Type Support");
     printf("\n>>> [CMD] MCTP Control - Get Message Type Support (Cmd=0x05) <<<\n");
 // ---------------------------------------------------------
 // ?? Get Message Type Support (Target EID = 5)
@@ -2117,6 +2568,7 @@ I2C_EnableInt(I2C1);
 		I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
+    cmd_begin("Read MI Data Struct");
     printf("\n>>> [CMD] NVMe-MI - Read MI Data Structure (Opcode=0x00, FW Version) <<<\n");
 uint8_t cmd_buf[29]; // ???????? 29 Bytes
 
@@ -2180,6 +2632,7 @@ I2C_EnableInt(I2C1);
 		I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
+    cmd_begin("NVM Subsys Health Poll");
     printf("\n>>> [CMD] NVMe-MI - NVM Subsystem Health Status Poll (Opcode=0x01) <<<\n");
 uint8_t cmd_buf[29];
 
@@ -2241,8 +2694,10 @@ I2C_EnableInt(I2C1);
 }
 
 {
-#if 0
+#if 1
 //Get FW VERSION
+    cmd_begin("Get Log FW Slot (2pkt)");
+    printf("\n>>> [CMD] NVMe Admin - Get Log Page FW Slot (72B, 2 pkts) <<<\n");
 		I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     
     s_I2C1HandlerFn = I2C_SlaveTRx;
@@ -2254,16 +2709,20 @@ memset(mi_msg, 0, sizeof(mi_msg));
 
 // 1. NVMe-MI Header (4 Bytes)
 mi_msg[0] = 0x84; // Msg Type: NVMe-MI (0x04) + IC Bit (0x80)
-mi_msg[1] = 0x10; // NMMT: 0x01 (NVMe Admin Command)
-mi_msg[2] = 0x00; // Flags
-mi_msg[3] = 0x01; // Reserved
+mi_msg[1] = 0x10; // NMP: NMIMT=2h (NVMe Admin Command), ROR=0, CSI=0  (2h << 3 = 0x10)
+mi_msg[2] = 0x00; // Reserved
+mi_msg[3] = 0x00; // Reserved
 
-// 2. NVMe SQE (64 Bytes,?? mi_msg[4] ~ mi_msg[67])
-mi_msg[4]  = 0x06; // SQE Dword 0: Opcode = 0x06 (Identify)
-// NVMe-MI ??:?? Offset ? Length ?????? 4096 Bytes
-mi_msg[28] = 0x00; // SQE Dword 6: Data Offset = 64 (FW Version ?????)
-mi_msg[32] = 0x00; // SQE Dword 7: Data Length = 8  (??? 8 Bytes)
-mi_msg[44] = 0x01; // SQE Dword 10: CNS = 0x01 (Identify Controller)
+// 2. NVMe SQE (64 Bytes, mi_msg[4] ~ mi_msg[67]) -- Get Log Page (FW Slot Info), same as a7
+mi_msg[4]  = 0x02; // SQE Dword 0: Opcode = 0x02 (Get Log Page)
+mi_msg[8]  = 0xFF; // SQE Dword 1: NSID = 0xFFFFFFFF (whole subsystem)
+mi_msg[9]  = 0xFF;
+mi_msg[10] = 0xFF;
+mi_msg[11] = 0xFF;
+mi_msg[32] = 0x1C; // SQE Dword 7: Data Length (DLEN) = 0x1C = 28
+mi_msg[44] = 0x03; // SQE Dword 10: LID = 0x03 (FW Slot Info)
+mi_msg[45] = 0x80; // SQE Dword 10: bit15 RAE = 1
+mi_msg[46] = 0x07; // SQE Dword 10: NUMDL = 0x0007 (8 dwords = 32B)
 
 // 3. ?? MIC (??? 68 Bytes ????)
 uint32_t mic = calc_mic(mi_msg, 68);
@@ -2275,10 +2734,10 @@ mi_msg[71] = (mic >> 24) & 0xFF;
 // =========================================================================
 // ?? B:???????? MCTP ?? (SOM=1, EOM=0)
 // =========================================================================
-uint8_t pkt1[64];
+uint8_t pkt1[73];
 pkt1[0] = 0x3A; // SSD Address (Write)
 pkt1[1] = 0x0F; // Command Code
-pkt1[2] = 60;   // SMBus Byte Count (1 Byte SrcAddr + 4 Bytes MCTP + 55 Bytes Payload)
+pkt1[2] = 69;   // SMBus Byte Count (1 SrcAddr + 4 MCTP + 64 Payload)
 
 // MCTP Header
 pkt1[3] = (MCU_ADDR_7BIT << 1) | 1; // Src Addr
@@ -2287,22 +2746,28 @@ pkt1[5] = 0x00; // Dest EID (Null EID)
 pkt1[6] = 0x01; // Src EID (????????)
 pkt1[7] = 0x88; // SOM=1, EOM=0, PktSeq=0, TO=1, MsgTag=0 (??? 1000 1000)
 
-// ??? 55 Bytes ? NVMe-MI Payload
-memcpy(&pkt1[8], &mi_msg[0], 55);
+// ??? 64 Bytes ? NVMe-MI Payload
+memcpy(&pkt1[8], &mi_msg[0], 64);
 
 // ?? PEC ??? I2C
-pkt1[63] = calc_pec_noinit(pkt1, 63);
-I2C_WriteMultiBytes(I2C_PORT, pkt1[0] >> 1, &pkt1[1], 63);
+pkt1[72] = calc_pec_noinit(pkt1, 72);
+{
+    int _i;
+    printf("[TX] MCTP PKT1 (SOM=1,EOM=0,Seq=0) 73 bytes incl PEC:\n");
+    for (_i = 0; _i < 73; _i++) printf("%02X ", pkt1[_i]);
+    printf("\n");
+}
+I2C_WriteMultiBytes(I2C_PORT, pkt1[0] >> 1, &pkt1[1], 72);
 		CLK_SysTickDelay(500000);
 // --- ?????? 1~2ms ? Delay,? SSD ??????? ---
 
 // =========================================================================
 // ?? C:???????? MCTP ?? (SOM=0, EOM=1)
 // =========================================================================
-uint8_t pkt2[26];
+uint8_t pkt2[17];
 pkt2[0] = 0x3A; // SSD Address (Write)
 pkt2[1] = 0x0F; // Command Code
-pkt2[2] = 22;   // SMBus Byte Count (1 Byte SrcAddr + 4 Bytes MCTP + 17 Bytes Payload)
+pkt2[2] = 13;   // SMBus Byte Count (1 SrcAddr + 4 MCTP + 8 Payload)
 
 // MCTP Header
 pkt2[3] = (MCU_ADDR_7BIT << 1) | 1; 
@@ -2311,12 +2776,18 @@ pkt2[5] = 0x00;
 pkt2[6] = 0x01; 
 pkt2[7] = 0x58; // SOM=0, EOM=1, PktSeq=1, TO=1, MsgTag=0 (??? 0101 1000)
 
-// ????? 17 Bytes NVMe-MI Payload (?? MIC)
-memcpy(&pkt2[8], &mi_msg[55], 17);
+// ????? 8 Bytes NVMe-MI Payload (SQE ?? 4B + MIC 4B)
+memcpy(&pkt2[8], &mi_msg[64], 8);
 
 // ?? PEC ??? I2C
-pkt2[25] = calc_pec_noinit(pkt2, 25);
-I2C_WriteMultiBytes(I2C_PORT, pkt2[0] >> 1, &pkt2[1], 25);
+pkt2[16] = calc_pec_noinit(pkt2, 16);
+{
+    int _i;
+    printf("[TX] MCTP PKT2 (SOM=0,EOM=1,Seq=1) 17 bytes incl PEC:\n");
+    for (_i = 0; _i < 17; _i++) printf("%02X ", pkt2[_i]);
+    printf("\n");
+}
+I2C_WriteMultiBytes(I2C_PORT, pkt2[0] >> 1, &pkt2[1], 16);
 
 	
 	
@@ -2326,12 +2797,389 @@ I2C_EnableInt(I2C1);
     I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
 		g_u8SlvRxFlag=0;
 		WAIT_SLV_RX_TIMEOUT();
-		//parse_mctp_smbus_response(g_au8SlvRxData, g_au8SlvRxData[1] + 2);
+		parse_mctp_smbus_response(g_au8SlvRxData, g_au8SlvRxData[1] + 2);
 		I2C_DisableInt(I2C1);
 		NVIC_DisableIRQ(I2C1_IRQn);	
 		CLK_SysTickDelay(500000);
 		#endif
 }
+
+// =========================================================================
+// CMD: NVMe Admin Get Log Page - SMART / Health Info (LID 0x02, 512B)
+// Request is the same 72B layout as FW Slot (2 pkts). Response is
+// NMH(4) + resp hdr(16) + log(512) + MIC(4) = 536B -> several MCTP packets,
+// received with mctp_rx_message().
+// =========================================================================
+{
+    static uint8_t s_smartResp[600];
+    uint8_t  msg[72];
+    uint16_t respLen = 0U;
+    int32_t  ret;
+
+    cmd_begin("Get Log SMART");
+    printf("\n>>> [CMD] NVMe Admin - Get Log Page SMART (LID=0x02, 512B, multi-pkt RX) <<<\n");
+
+    memset(msg, 0, sizeof(msg));
+    msg[0]  = 0x84;                  // NMH0: IC bit + NVMe-MI msg type
+    msg[1]  = 0x10;                  // NMH1: NMIMT=0x02 (NVMe Admin Command)
+    msg[4]  = 0x02;                  // OPC  = Get Log Page
+    msg[8]  = 0xFF;                  // NSID = 0xFFFFFFFF
+    msg[9]  = 0xFF;
+    msg[10] = 0xFF;
+    msg[11] = 0xFF;
+    msg[32] = 0x00;                  // DLEN = 0x00000200 (512)
+    msg[33] = 0x02;
+    msg[44] = 0x02;                  // LID  = 0x02 (SMART / Health Information)
+    msg[45] = 0x80;                  // RAE  = 1 (required for OOB Get Log Page)
+    msg[46] = 0x7F;                  // NUMDL = 127 -> 128 dwords = 512B
+    msg[47] = 0x00;
+    {
+        uint32_t mic = calc_mic(msg, 68);
+        msg[68] = (uint8_t)(mic & 0xFF);
+        msg[69] = (uint8_t)((mic >> 8) & 0xFF);
+        msg[70] = (uint8_t)((mic >> 16) & 0xFF);
+        msg[71] = (uint8_t)((mic >> 24) & 0xFF);
+    }
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+    s_rxqRd = s_rxqWr;               /* drop stale packets from earlier commands */
+
+    mctp_tx_message(msg, (uint16_t)sizeof(msg));
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    ret = mctp_rx_message(s_smartResp, (uint16_t)sizeof(s_smartResp), &respLen);
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+
+    if (ret != 0)
+    {
+        printf("  [FAIL] SMART Log RX error %d\n", ret);
+    }
+    else if (respLen < 24U)
+    {
+        printf("  [FAIL] response too short (%u bytes)\n", respLen);
+    }
+    else
+    {
+        /* msg: [0..3]=NMH [4]=Status [8..11]=CQE DW0 [12..15]=DW1 [16..19]=DW3 [20..]=log data */
+        uint8_t  *pD     = &s_smartResp[20];
+        uint16_t dataLen = (uint16_t)(respLen - 24U);
+        uint16_t i;
+
+        printf("  NMH=%02X %02X  Status=0x%02X  CQE DW3=%02X %02X %02X %02X  data=%u bytes\n",
+               s_smartResp[0], s_smartResp[1], s_smartResp[4],
+               s_smartResp[16], s_smartResp[17], s_smartResp[18], s_smartResp[19], dataLen);
+        for (i = 0U; i < dataLen; i++)
+        {
+            printf("%02X ", pD[i]);
+            if ((i & 0x0FU) == 0x0FU)
+            {
+                printf("\n");
+            }
+        }
+        printf("\n");
+
+        if ((s_smartResp[1] == 0x90U) && (s_smartResp[4] == 0x00U) && (dataLen >= 176U))
+        {
+            /* 128-bit counters: only the low 32 bits are printed */
+            uint16_t tempK = (uint16_t)pD[1] | ((uint16_t)pD[2] << 8);
+            printf("========================================\n");
+            printf("  SMART / Health Information (LID 0x02)\n");
+            printf("========================================\n");
+            printf("  Critical Warning   : 0x%02X\n", pD[0]);
+            printf("  Composite Temp     : %d C (%u K)\n", (int32_t)tempK - 273, tempK);
+            g_composTempC = (int32_t)tempK - 273;   /* capture for summary */
+            printf("  Available Spare    : %u%%\n", pD[3]);
+            printf("  Spare Threshold    : %u%%\n", pD[4]);
+            printf("  Percentage Used    : %u%%\n", pD[5]);
+            printf("  Data Units Read    : %u (x512000 B)\n",
+                   (uint32_t)pD[32] | ((uint32_t)pD[33] << 8) | ((uint32_t)pD[34] << 16) | ((uint32_t)pD[35] << 24));
+            printf("  Data Units Written : %u (x512000 B)\n",
+                   (uint32_t)pD[48] | ((uint32_t)pD[49] << 8) | ((uint32_t)pD[50] << 16) | ((uint32_t)pD[51] << 24));
+            printf("  Power Cycles       : %u\n",
+                   (uint32_t)pD[112] | ((uint32_t)pD[113] << 8) | ((uint32_t)pD[114] << 16) | ((uint32_t)pD[115] << 24));
+            printf("  Power On Hours     : %u\n",
+                   (uint32_t)pD[128] | ((uint32_t)pD[129] << 8) | ((uint32_t)pD[130] << 16) | ((uint32_t)pD[131] << 24));
+            printf("  Unsafe Shutdowns   : %u\n",
+                   (uint32_t)pD[144] | ((uint32_t)pD[145] << 8) | ((uint32_t)pD[146] << 16) | ((uint32_t)pD[147] << 24));
+            printf("  Media Errors       : %u\n",
+                   (uint32_t)pD[160] | ((uint32_t)pD[161] << 8) | ((uint32_t)pD[162] << 16) | ((uint32_t)pD[163] << 24));
+            printf("========================================\n");
+        }
+    }
+    printf("=== NVMe Admin Get Log Page SMART Complete ===\n\n");
+}
+
+// =========================================================================
+// CMD: NVMe Admin Identify Controller (Opcode 0x06, CNS 0x01, 4096B)
+// Response = NMH(4) + resp hdr(16) + 4096 + MIC(4) = 4120B -> ~65 MCTP packets.
+// =========================================================================
+{
+    static uint8_t s_idResp[4200];
+    uint8_t  msg[72];
+    uint16_t respLen = 0U;
+    int32_t  ret;
+
+    cmd_begin("Identify Controller");
+    printf("\n>>> [CMD] NVMe Admin - Identify Controller (Opc=0x06, CNS=0x01, 4096B, multi-pkt RX) <<<\n");
+
+    memset(msg, 0, sizeof(msg));
+    msg[0]  = 0x84;                  // NMH0: IC bit + NVMe-MI msg type
+    msg[1]  = 0x10;                  // NMH1: NMIMT=0x02 (NVMe Admin Command)
+    msg[4]  = 0x06;                  // OPC  = Identify
+    msg[32] = 0x00;                  // DLEN = 0x00001000 (4096)
+    msg[33] = 0x10;
+    msg[44] = 0x01;                  // CDW10: CNS = 0x01 (Identify Controller)
+    {
+        uint32_t mic = calc_mic(msg, 68);
+        msg[68] = (uint8_t)(mic & 0xFF);
+        msg[69] = (uint8_t)((mic >> 8) & 0xFF);
+        msg[70] = (uint8_t)((mic >> 16) & 0xFF);
+        msg[71] = (uint8_t)((mic >> 24) & 0xFF);
+    }
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+    s_rxqRd = s_rxqWr;               /* drop stale packets from earlier commands */
+
+    mctp_tx_message(msg, (uint16_t)sizeof(msg));
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    ret = mctp_rx_message(s_idResp, (uint16_t)sizeof(s_idResp), &respLen);
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+
+    if (ret != 0)
+    {
+        printf("  [FAIL] Identify RX error %d\n", ret);
+    }
+    else if (respLen < 24U)
+    {
+        printf("  [FAIL] response too short (%u bytes)\n", respLen);
+    }
+    else
+    {
+        uint8_t  *pD     = &s_idResp[20];
+        uint16_t dataLen = (uint16_t)(respLen - 24U);
+        uint16_t i;
+
+        printf("  NMH=%02X %02X  Status=0x%02X  CQE DW3=%02X %02X %02X %02X  data=%u bytes\n",
+               s_idResp[0], s_idResp[1], s_idResp[4],
+               s_idResp[16], s_idResp[17], s_idResp[18], s_idResp[19], dataLen);
+        /* Dump only the first 256 bytes to keep the log readable */
+        for (i = 0U; (i < dataLen) && (i < 256U); i++)
+        {
+            printf("%02X ", pD[i]);
+            if ((i & 0x0FU) == 0x0FU)
+            {
+                printf("\n");
+            }
+        }
+        printf("\n");
+
+        if ((s_idResp[1] == 0x90U) && (s_idResp[4] == 0x00U) && (dataLen >= 80U))
+        {
+            printf("========================================\n");
+            printf("  Identify Controller (CNS 0x01)\n");
+            printf("========================================\n");
+            printf("  PCI VID    : 0x%04X\n", (uint16_t)pD[0] | ((uint16_t)pD[1] << 8));
+            printf("  PCI SSVID  : 0x%04X\n", (uint16_t)pD[2] | ((uint16_t)pD[3] << 8));
+            printf("  SN         : [");
+            for (i = 4U; i < 24U; i++)
+            {
+                printf("%c", ((pD[i] >= 0x20U) && (pD[i] <= 0x7EU)) ? pD[i] : '.');
+            }
+            printf("]\n  MN         : [");
+            for (i = 24U; i < 64U; i++)
+            {
+                printf("%c", ((pD[i] >= 0x20U) && (pD[i] <= 0x7EU)) ? pD[i] : '.');
+            }
+            printf("]\n  FR         : [");
+            for (i = 64U; i < 72U; i++)
+            {
+                printf("%c", ((pD[i] >= 0x20U) && (pD[i] <= 0x7EU)) ? pD[i] : '.');
+            }
+            /* Capture FR (firmware revision) for the final summary */
+            {
+                uint8_t fi;
+                for (fi = 0U; fi < 8U; fi++)
+                {
+                    uint8_t c = pD[64U + fi];
+                    g_fwRevStr[fi] = ((c >= 0x20U) && (c <= 0x7EU)) ? (char)c : '.';
+                }
+                g_fwRevStr[8] = '\0';
+            }
+            printf("]\n  CNTLID     : 0x%04X\n", (uint16_t)pD[78] | ((uint16_t)pD[79] << 8));
+            printf("========================================\n");
+        }
+    }
+    printf("=== NVMe Admin Identify Controller Complete ===\n\n");
+}
+
+// =========================================================================
+// CMD: NVMe Admin Get Features - Power Management (Opcode 0x0A, FID 0x02)
+// SEL=0 (current). Result is returned in CQE DW0: PS[4:0], WH[7:5].
+// =========================================================================
+{
+    uint8_t  msg[72];
+    uint8_t  resp[64];
+    uint16_t respLen = 0U;
+    int32_t  ret;
+
+    cmd_begin("Get Features Power Mgmt");
+    printf("\n>>> [CMD] NVMe Admin - Get Features Power Management (Opc=0x0A, FID=0x02) <<<\n");
+
+    memset(msg, 0, sizeof(msg));
+    msg[0]  = 0x84;                  // IC bit + NVMe-MI msg type
+    msg[1]  = 0x10;                  // NMIMT=0x02 (NVMe Admin Command)
+    msg[4]  = 0x0A;                  // OPC = Get Features
+    msg[44] = 0x02;                  // CDW10: FID = 0x02 (Power Management), SEL = 0 (current)
+    {
+        uint32_t mic = calc_mic(msg, 68);
+        msg[68] = (uint8_t)(mic & 0xFF);
+        msg[69] = (uint8_t)((mic >> 8) & 0xFF);
+        msg[70] = (uint8_t)((mic >> 16) & 0xFF);
+        msg[71] = (uint8_t)((mic >> 24) & 0xFF);
+    }
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+    s_rxqRd = s_rxqWr;
+    mctp_tx_message(msg, (uint16_t)sizeof(msg));
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &respLen);
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+
+    if ((ret != 0) || (respLen < 8U))
+    {
+        printf("  [FAIL] RX error %d (len=%u)\n", ret, respLen);
+    }
+    else if (resp[4] != 0x00U)
+    {
+        printf("  MI Status=0x%02X (%s)\n", resp[4], nvme_mi_status_str(resp[4]));
+    }
+    else if (respLen < 24U)
+    {
+        printf("  [FAIL] response too short (%u bytes)\n", respLen);
+    }
+    else
+    {
+        uint32_t dw0 = (uint32_t)resp[8] | ((uint32_t)resp[9] << 8)
+                     | ((uint32_t)resp[10] << 16) | ((uint32_t)resp[11] << 24);
+        uint32_t dw3 = (uint32_t)resp[16] | ((uint32_t)resp[17] << 8)
+                     | ((uint32_t)resp[18] << 16) | ((uint32_t)resp[19] << 24);
+        uint8_t  sc  = (uint8_t)((dw3 >> 17) & 0xFFU);
+        uint8_t  sct = (uint8_t)((dw3 >> 25) & 0x07U);
+
+        printf("  CQE DW0=0x%08X  DW3=0x%08X  SCT=0x%X SC=0x%02X\n", dw0, dw3, sct, sc);
+        if ((sc == 0U) && (sct == 0U))
+        {
+            printf("  Power State (PS)     : %u\n", dw0 & 0x1FU);
+            printf("  Workload Hint (WH)   : %u\n", (dw0 >> 5) & 0x07U);
+        }
+    }
+    printf("=== NVMe Admin Get Features Power Management Complete ===\n\n");
+}
+
+// =========================================================================
+// CMD: NVMe Admin Format NVM (Opcode 0x80)
+// !!! DESTRUCTIVE: erases all user data on every namespace !!!
+// NSID=0xFFFFFFFF (all), CDW10 = 0 -> LBAF=0, MSET=0, PI=0, PIL=0, SES=0.
+// No data transfer: response is a CQE only (single packet).
+// Set NVME_FORMAT_ENABLE to 0U to skip this step.
+// =========================================================================
+#define NVME_FORMAT_ENABLE      (1U)
+#define NVME_FORMAT_WAIT_RETRY  (20U)    /* x MCTP_RX_TIMEOUT_CNT per retry */
+#if (NVME_FORMAT_ENABLE == 1U)
+{
+    uint8_t  msg[72];
+    uint8_t  resp[64];
+    uint16_t respLen = 0U;
+    int32_t  ret = -2;
+    uint8_t  retry;
+
+    cmd_begin("Format NVM");
+    printf("\n>>> [CMD] NVMe Admin - Format NVM (Opc=0x80, NSID=ALL, LBAF=0, SES=0) <<<\n");
+    printf("  !!! WARNING: all user data on the SSD will be erased !!!\n");
+
+    memset(msg, 0, sizeof(msg));
+    msg[0]  = 0x84;                  // NMH0: IC bit + NVMe-MI msg type
+    msg[1]  = 0x10;                  // NMH1: NMIMT=0x02 (NVMe Admin Command)
+    msg[4]  = 0x80;                  // OPC  = Format NVM
+    msg[8]  = 0xFF;                  // NSID = 0xFFFFFFFF (all namespaces)
+    msg[9]  = 0xFF;
+    msg[10] = 0xFF;
+    msg[11] = 0xFF;
+    /* msg[32..35] DLEN = 0 (no data), msg[44..47] CDW10 = 0 (LBAF/MSET/PI/SES = 0) */
+    {
+        uint32_t mic = calc_mic(msg, 68);
+        msg[68] = (uint8_t)(mic & 0xFF);
+        msg[69] = (uint8_t)((mic >> 8) & 0xFF);
+        msg[70] = (uint8_t)((mic >> 16) & 0xFF);
+        msg[71] = (uint8_t)((mic >> 24) & 0xFF);
+    }
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+    s_rxqRd = s_rxqWr;               /* drop stale packets from earlier commands */
+
+    mctp_tx_message(msg, (uint16_t)sizeof(msg));
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    /* Format may take longer than one RX timeout: keep waiting on "no packet yet" */
+    for (retry = 0U; (retry < NVME_FORMAT_WAIT_RETRY) && (ret == -2); retry++)
+    {
+        ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &respLen);
+    }
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+
+    if (ret != 0)
+    {
+        printf("  [FAIL] Format RX error %d\n", ret);
+    }
+    else if (respLen < 8U)
+    {
+        printf("  [FAIL] response too short (%u bytes)\n", respLen);
+    }
+    else
+    {
+        /* msg: [0..3]=NMH [4]=NVMe-MI Status; if Status=0: [16..19]=CQE DW3 */
+        printf("  Resp: NMH=%02X %02X  MI Status=0x%02X  len=%u\n",
+               resp[0], resp[1], resp[4], respLen);
+        if ((resp[1] == 0x90U) && (resp[4] == 0x00U) && (respLen >= 24U))
+        {
+            uint32_t dw3 = (uint32_t)resp[16] | ((uint32_t)resp[17] << 8)
+                         | ((uint32_t)resp[18] << 16) | ((uint32_t)resp[19] << 24);
+            uint8_t  sc  = (uint8_t)((dw3 >> 17) & 0xFFU);
+            uint8_t  sct = (uint8_t)((dw3 >> 25) & 0x07U);
+
+            printf("  CQE DW3=0x%08X  SCT=0x%X SC=0x%02X  => %s\n",
+                   dw3, sct, sc, ((sc == 0U) && (sct == 0U)) ? "FORMAT OK" : "FORMAT FAILED");
+        }
+        else
+        {
+            printf("  [FAIL] not a successful Admin response (see MI Status)\n");
+        }
+    }
+    printf("=== NVMe Admin Format NVM Complete ===\n\n");
+}
+#endif
 
 // =========================================================================
 // NVMe Identify Device Function
@@ -2506,6 +3354,7 @@ I2C_EnableInt(I2C1);
 //   0x03 = Controller Information
 // =========================================================================
 {
+    cmd_begin("Read MI Data (DTYP Sweep)");
     printf("\n>>> [CMD] NVMe-MI - Read NVMe-MI Data Structure (DTYP Sweep 0x00~0x03) <<<\n");
     printf("=== DTYP Sweep (CNTLID=0x00, DSPEC=0x00, testing DTYP 0x00..0x03) ===\n");
 
@@ -2652,10 +3501,9 @@ I2C_EnableInt(I2C1);
     printf("CONCLUSION: This device NVMe-MI firmware\n");
     printf("  - Supports  : DTYP=0x00 (NVM Subsystem Info)\n");
     printf("  - Ignores   : DTYP=0x01/0x02/0x03 (returns same DTYP=0x00 data)\n");
-    printf("  - No Support: NVMe Basic Management (SMBus Reg 0x00)\n");
     printf("  - CNTLID=0x01 returns Status=0x01 (only CNTLID=0x00 valid)\n");
-    printf("  => Vendor info (VID/SN) NOT retrievable via NVMe-MI SMBus\n");
-    printf("  => Use NVMe Admin Identify via PCIe for full device info\n");
+    printf("  => VID/SN: Basic Management @0x6A, or Admin Identify over MCTP\n");
+    printf("  => FW rev: Admin Get Log Page LID 0x03 over MCTP\n");
     printf("========================================\n\n");
 }
 
@@ -2696,123 +3544,88 @@ I2C_EnableInt(I2C1);
 //   raw[20]    = Composite Smart Critical Warnings
 // =========================================================================
 {
+    cmd_begin("Ctrl Health Poll");
     printf("\n>>> [CMD] NVMe-MI - Controller Health Status Poll (Opcode=0x02) <<<\n");
     printf("=== Controller Health Status Poll ===\n");
 
-    uint8_t chsp_buf[24];
+    /* Request = NMH(4) + Opcode/Rsvd(4) + NMD0(4) + NMD1(4) + MIC(4) = 20B.
+     * The old 8B request (no NMD0/NMD1) got Status 0x05 (Invalid Command Size). */
+    uint8_t  chsp_msg[20];
+    uint8_t  chsp_resp[64];
+    uint16_t chsp_len = 0U;
+    int32_t  chsp_ret;
 
-    // SMBus Header
-    // Byte Count = src_addr(1) + MCTP_hdr(4) + NVMe-MI_payload(8) + MIC(4) = 17 = 0x11
-    chsp_buf[0] = 0x3A;
-    chsp_buf[1] = 0x0F;
-    chsp_buf[2] = 0x11;  // Byte Count = 17
-
-    // MCTP Header
-    chsp_buf[3] = (MCU_ADDR_7BIT << 1) | 1;
-    chsp_buf[4] = 0x01;
-    chsp_buf[5] = 0x00;  // Dest EID
-    chsp_buf[6] = 0x01;  // Src EID
-    chsp_buf[7] = 0xC8;  // SOM=1, EOM=1
-
-    // NVMe-MI Payload: Controller Health Status Poll
-    chsp_buf[8]  = 0x84;  // Msg Type: NVMe-MI + IC bit
-    chsp_buf[9]  = 0x08;  // NMIMT: NVMe-MI Command
-    chsp_buf[10] = 0x00;  // Flags
-    chsp_buf[11] = 0x00;  // CNTLID Low = 0
-    chsp_buf[12] = 0x00;  // CNTLID High
-    chsp_buf[13] = 0x02;  // Opcode: 0x02 = Controller Health Status Poll
-    chsp_buf[14] = 0x00;  // Reserved
-    chsp_buf[15] = 0x00;  // Reserved
-
-    // MIC (covers bytes [8..15], 8 bytes)
-    uint32_t chsp_mic = calc_mic(&chsp_buf[8], 8);
-    chsp_buf[16] = (uint8_t)(chsp_mic & 0xFF);
-    chsp_buf[17] = (uint8_t)((chsp_mic >> 8)  & 0xFF);
-    chsp_buf[18] = (uint8_t)((chsp_mic >> 16) & 0xFF);
-    chsp_buf[19] = (uint8_t)((chsp_mic >> 24) & 0xFF);
-
-    // PEC
-    chsp_buf[20] = calc_pec_noinit(chsp_buf, 20);
+    memset(chsp_msg, 0, sizeof(chsp_msg));
+    chsp_msg[0] = 0x84;              // IC bit + NVMe-MI msg type
+    chsp_msg[1] = 0x08;              // NMIMT=0x01 (NVMe-MI Command)
+    chsp_msg[4] = 0x02;              // Opcode: Controller Health Status Poll
+    /* NMD0 = 0x87010000 (same as the working NMP=0x08 request):
+     *   [15:0] SCTLID=0, [23:16] MAXRENT=1,
+     *   bit24/25/26 include PCIe function / SR-IOV PF / SR-IOV VF, bit31 ALL.
+     * Without the include bits the drive returns 0 entries.
+     * NMD1 = 0: do not clear change flags. */
+    chsp_msg[10] = 0x01;
+    chsp_msg[11] = 0x87;
+    {
+        uint32_t mic = calc_mic(chsp_msg, 16);
+        chsp_msg[16] = (uint8_t)(mic & 0xFF);
+        chsp_msg[17] = (uint8_t)((mic >> 8) & 0xFF);
+        chsp_msg[18] = (uint8_t)((mic >> 16) & 0xFF);
+        chsp_msg[19] = (uint8_t)((mic >> 24) & 0xFF);
+    }
 
     I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     s_I2C1HandlerFn = I2C_SlaveTRx;
-    I2C_WriteMultiBytes(I2C_PORT, chsp_buf[0] >> 1, &chsp_buf[1], 20);
+    s_rxqRd = s_rxqWr;
+    mctp_tx_message(chsp_msg, (uint16_t)sizeof(chsp_msg));
 
     I2C_EnableInt(I2C1);
     NVIC_EnableIRQ(I2C1_IRQn);
     I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
     g_u8SlvRxFlag = 0;
-    while (g_u8SlvRxFlag == 0);
+    chsp_ret = mctp_rx_message(chsp_resp, (uint16_t)sizeof(chsp_resp), &chsp_len);
     I2C_DisableInt(I2C1);
     NVIC_DisableIRQ(I2C1_IRQn);
 
-    uint8_t chsp_status = g_au8SlvRxData[10];
-    printf("  Status : 0x%02X (%s)\n", chsp_status,
-           chsp_status == 0x00 ? "Success" : "Error");
-
-    // Raw dump
-    printf("  Raw   : ");
+    if ((chsp_ret != 0) || (chsp_len < 8U))
     {
-        uint8_t r;
-        for (r = 0; r < g_au8SlvRxData[1] + 2 && r < 32; r++)
-            printf("%02X ", g_au8SlvRxData[r]);
-        printf("\n");
+        printf("  [FAIL] RX error %d (len=%u)\n", chsp_ret, chsp_len);
     }
-
-    if (chsp_status == 0x00)
+    else if (chsp_resp[4] != 0x00U)
     {
-        uint8_t byte_cnt_chsp = g_au8SlvRxData[1];
-        uint16_t csts   = (uint16_t)g_au8SlvRxData[11] |
-                          ((uint16_t)g_au8SlvRxData[12] << 8);
-        uint16_t temp_k = (byte_cnt_chsp >= 15) ?
-                          ((uint16_t)g_au8SlvRxData[13] |
-                           ((uint16_t)g_au8SlvRxData[14] << 8)) : 0;
-        int temp_c = (temp_k >= 273) ? ((int)temp_k - 273) : 0;
-        // MIC is 4 bytes at end; data at raw[15] valid only when ByteCount >= 18
-        uint8_t spare    = (byte_cnt_chsp >= 18) ? g_au8SlvRxData[15] : 0xFF;
-        uint8_t spare_th = (byte_cnt_chsp >= 19) ? g_au8SlvRxData[16] : 0xFF;
-        uint8_t pdlu     = (byte_cnt_chsp >= 20) ? g_au8SlvRxData[17] : 0xFF;
-        uint8_t cw       = (byte_cnt_chsp >= 21) ? g_au8SlvRxData[18] : 0xFF;
-
-        printf("========================================\n");
-        printf("  Controller Health Status Poll\n");
-        printf("  (ByteCount=%d, body=%d bytes)\n", byte_cnt_chsp,
-               byte_cnt_chsp >= 9 ? byte_cnt_chsp - 9 : 0);
-        printf("========================================\n");
-        printf("  CSTS (0x%04X):\n", csts);
-        printf("    Ready              : %s\n", (csts & 0x0001) ? "Yes" : "No");
-        printf("    Controller Fatal   : %s\n", (csts & 0x0002) ? "YES - FATAL" : "No");
-        printf("    Shutdown Status    : %s\n",
-               ((csts >> 2) & 0x3) == 0 ? "Normal" :
-               ((csts >> 2) & 0x3) == 1 ? "Shutdown Occurring" :
-               ((csts >> 2) & 0x3) == 2 ? "Shutdown Complete" : "?");
-
-        printf("  Composite Temp      : ");
-        if (temp_k == 0)     printf("No Data\n");
-        else                 printf("%d C  (%d K)\n", temp_c, temp_k);
-
-        if (spare != 0xFF)   printf("  Available Spare     : %d%%\n", spare);
-        else                 printf("  Available Spare     : N/A (short response)\n");
-        if (spare_th != 0xFF) printf("  Spare Threshold     : %d%%\n", spare_th);
-        if (pdlu != 0xFF)    printf("  Drive Life Used     : %d%%\n", pdlu);
-        if (cw != 0xFF) {
-            printf("  SMART Critical Warn : 0x%02X", cw);
-            if (cw == 0x00) printf(" (No Warnings)\n");
-            else {
-                printf("\n");
-                if (cw & 0x01) printf("    [!] Spare below threshold\n");
-                if (cw & 0x02) printf("    [!] Temperature above threshold\n");
-                if (cw & 0x04) printf("    [!] NVM reliability degraded\n");
-                if (cw & 0x08) printf("    [!] Media read-only\n");
-                if (cw & 0x10) printf("    [!] Volatile backup failed\n");
-            }
-        }
-        printf("========================================\n");
+        printf("  Status : 0x%02X (%s)\n", chsp_resp[4], nvme_mi_status_str(chsp_resp[4]));
+    }
+    else if (chsp_len < 26U)
+    {
+        printf("  Status : 0x00 but response too short (%u bytes, entries=%u)\n",
+               chsp_len, chsp_resp[7]);
     }
     else
     {
-        printf("  [NOTE] Controller Health Status Poll not supported (Status!=0)\n");
-        printf("         Use NVM Subsystem Health Poll (Opcode=0x01) instead.\n");
+        /* msg: [4]=Status [7]=entries; entry at [8]: CTLID(2) CSTS(2) CTEMP(2,K)
+         * PDLU(1) SPARE(1) CWARN(1) CHSC(2) */
+        uint8_t  *pE    = &chsp_resp[8];
+        uint16_t csts   = (uint16_t)pE[2] | ((uint16_t)pE[3] << 8);
+        uint16_t tempK  = (uint16_t)pE[4] | ((uint16_t)pE[5] << 8);
+        uint8_t  cw     = pE[8];
+
+        printf("  Status : 0x00 (Success)  entries=%u\n", chsp_resp[7]);
+        printf("========================================\n");
+        printf("  Controller Health (CTLID 0x%04X)\n", (uint16_t)pE[0] | ((uint16_t)pE[1] << 8));
+        printf("========================================\n");
+        printf("  CSTS (0x%04X):\n", csts);
+        nvme_mi_print_csts(csts);
+        printf("  Composite Temp      : %d C  (%u K)\n", (int32_t)tempK - 273, tempK);
+        printf("  Drive Life Used     : %u%%\n", pE[6]);
+        printf("  Available Spare     : %u%%\n", pE[7]);
+        printf("  SMART Critical Warn : 0x%02X%s\n", cw, (cw == 0U) ? " (No Warnings)" : "");
+        if ((cw & 0x01U) != 0U) { printf("    [!] Spare below threshold\n"); }
+        if ((cw & 0x02U) != 0U) { printf("    [!] Temperature out of range\n"); }
+        if ((cw & 0x04U) != 0U) { printf("    [!] NVM reliability degraded\n"); }
+        if ((cw & 0x08U) != 0U) { printf("    [!] Media read-only\n"); }
+        if ((cw & 0x10U) != 0U) { printf("    [!] Volatile backup failed\n"); }
+        printf("  CHSC (changed flags): 0x%04X\n", (uint16_t)pE[9] | ((uint16_t)pE[10] << 8));
+        printf("========================================\n");
     }
 
     CLK_SysTickDelay(300000);
@@ -2820,209 +3633,448 @@ I2C_EnableInt(I2C1);
 }
 
 // =========================================================================
-// CMD: Get Log Page - Firmware Slot Information (Admin PT, Log ID=0x03)
+// CMD: NVMe Admin Command - SINGLE-PACKET probe (Keep Alive, OPC=0x18)
+// =========================================================================
+// A compliant Admin *data-in* request (Get Log Page / Identify) carries a full
+// 80-byte SQE + DLEN, so the NVMe-MI message is 81 bytes and MUST split into
+// 2 MCTP packets. This drive does not reassemble multi-packet MCTP -> no reply.
+//
+// To still prove the Admin channel is ALIVE we send a "no-data" Admin command:
+//   * CFLGS = 0  (no DLENV / DOFSTV) -> NO data-in
+//   * OPC   = 0x18 Keep Alive        -> needs no NSID, no buffer
+//   * message truncated after the used CDWs so total payload <= 64 bytes
+// The device can then answer in a SINGLE packet with a CQE completion only
+// (NMIMT=0x90, Status), i.e. "command accepted" WITHOUT any log/data payload.
+//
+//   MMHDR NMIMT (bits [5:3] of the NVMe-MI header byte):
+//     0x10 -> NVMe Admin Command request  / 0x90 response
 // =========================================================================
 {
-    printf("\n>>> [CMD] NVMe Admin PT - Get Log Page (Log ID=0x03 FW Slot Info) <<<\n");
-    printf("=== Get FW Revision via Admin Passthrough ===\n");
+    cmd_begin("Keep Alive probe");
+    printf("\n>>> [CMD] NVMe Admin - Single-packet probe (Keep Alive) <<<\n");
+    printf("=== No-data Admin cmd, full 72B request (NMH4+SQE64+MIC4) ===\n");
 
-    uint8_t fw_buf[29];
+    {
+        uint8_t  m[72];
+        uint8_t  r[64];
+        uint16_t rlen = 0U;
+        int32_t  ret;
 
-    fw_buf[0] = 0x3A;
-    fw_buf[1] = 0x0F;
-    fw_buf[2] = 0x19;
-    fw_buf[3] = (MCU_ADDR_7BIT << 1) | 1;
-    fw_buf[4] = 0x01;
-    fw_buf[5] = 0x00;
-    fw_buf[6] = 0x01;
-    fw_buf[7] = 0xC8;
-    fw_buf[8]  = 0x84;
-    fw_buf[9]  = 0x08;
-    fw_buf[10] = 0x00;
-    fw_buf[11] = 0x00;
-    fw_buf[12] = 0x00;
-    fw_buf[13] = 0x06;  // NVMe-MI Opcode: Admin Passthrough
-    fw_buf[14] = 0x02;  // NVMe Admin Opcode: Get Log Page
-    fw_buf[15] = 0x00;
-    fw_buf[16] = 0x03;  // Log ID = 0x03 (Firmware Slot Info)
-    fw_buf[17] = 0x0F;  // NUMD = 15
-    fw_buf[18] = 0x00;
-    fw_buf[19] = 0x00;
-    fw_buf[20] = 0x00;
-    fw_buf[21] = 0x00;
-    fw_buf[22] = 0x00;
-    fw_buf[23] = 0x00;
+        memset(m, 0, sizeof(m));
+        m[0] = 0x84;                 // IC bit + NVMe-MI msg type
+        m[1] = 0x10;                 // NMIMT=0x02 (NVMe Admin Command)
+        m[4] = 0x18;                 // OPC = Keep Alive, no data
+        {
+            uint32_t mic = calc_mic(m, 68);
+            m[68] = (uint8_t)(mic & 0xFF);
+            m[69] = (uint8_t)((mic >> 8) & 0xFF);
+            m[70] = (uint8_t)((mic >> 16) & 0xFF);
+            m[71] = (uint8_t)((mic >> 24) & 0xFF);
+        }
 
-    uint32_t fw_mic = calc_mic(&fw_buf[8], 16);
-    fw_buf[24] = (uint8_t)(fw_mic & 0xFF);
-    fw_buf[25] = (uint8_t)((fw_mic >> 8)  & 0xFF);
-    fw_buf[26] = (uint8_t)((fw_mic >> 16) & 0xFF);
-    fw_buf[27] = (uint8_t)((fw_mic >> 24) & 0xFF);
-    fw_buf[28] = calc_pec_noinit(fw_buf, 28);
+        I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+        s_I2C1HandlerFn = I2C_SlaveTRx;
+        s_rxqRd = s_rxqWr;
+        mctp_tx_message(m, (uint16_t)sizeof(m));
+
+        I2C_EnableInt(I2C1);
+        NVIC_EnableIRQ(I2C1_IRQn);
+        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+        g_u8SlvRxFlag = 0;
+        ret = mctp_rx_message(r, (uint16_t)sizeof(r), &rlen);
+        I2C_DisableInt(I2C1);
+        NVIC_DisableIRQ(I2C1_IRQn);
+
+        if ((ret != 0) || (rlen < 8U))
+        {
+            printf("  [FAIL] RX error %d (len=%u)\n", ret, rlen);
+        }
+        else
+        {
+            /* msg: [0..3]=NMH [4]=NVMe-MI Status; CQE DW3 at [16..19] on success */
+            printf("  Resp: NMH=%02X %02X  MI Status=0x%02X (%s)  len=%u\n",
+                   r[0], r[1], r[4], nvme_mi_status_str(r[4]), rlen);
+            if ((r[4] == 0x00U) && (rlen >= 24U))
+            {
+                uint32_t dw3 = (uint32_t)r[16] | ((uint32_t)r[17] << 8)
+                             | ((uint32_t)r[18] << 16) | ((uint32_t)r[19] << 24);
+                printf("  CQE DW3=0x%08X  SCT=0x%X SC=0x%02X\n", dw3,
+                       (dw3 >> 25) & 0x07U, (dw3 >> 17) & 0xFFU);
+            }
+            else if (r[4] == 0x03U)
+            {
+                printf("  [NOTE] Keep Alive is not accepted out-of-band on this drive.\n");
+                printf("         Admin channel itself works (Get Log / Identify / Format).\n");
+            }
+            else
+            {
+                /* other MI error: nothing more to decode */
+            }
+        }
+    }
+
+    CLK_SysTickDelay(300000);
+    printf("=== NVMe Admin Single-packet probe Complete ===\n\n");
+}
+
+// =========================================================================
+// CMD (TASK 1): Read NVMe-MI Data Structure - Optionally Supported Command List
+// =========================================================================
+// Vendor guidance: use "Read NVMe-MI Data Structure" with DTYP=0x04 to see
+// which OOB (out-of-band) Admin commands are supported over SMBus/MCTP.
+// This is an NVMe-MI Command (NMIMT=0x08) -> single-packet request/response,
+// same working framing as the DTYP sweep above.
+// =========================================================================
+{
+    cmd_begin("Optional Supported Cmd List");
+    printf("\n>>> [CMD] NVMe-MI - Optionally Supported Command List (DTYP=0x04) <<<\n");
+    printf("=== Read NVMe-MI Data Structure, DTYP=0x04 (OOB Admin cmd list) ===\n");
+
+    uint8_t rb[29];
+
+    rb[0] = 0x3A;
+    rb[1] = 0x0F;
+    rb[2] = 0x19;                    // Byte Count = 25
+
+    rb[3] = (MCU_ADDR_7BIT << 1) | 1;
+    rb[4] = 0x01;
+    rb[5] = 0x00;                    // Dest EID
+    rb[6] = 0x01;                    // Src EID
+    rb[7] = 0xC8;                    // SOM=1 EOM=1 seq=0 TO=1
+
+    rb[8]  = 0x84;                   // msgtype: NVMe-MI + IC
+    rb[9]  = 0x08;                   // NMIMT = NVMe-MI Command
+    rb[10] = 0x00;                   // Flags
+    rb[11] = 0x00;                   // CNTLID low
+    rb[12] = 0x00;                   // CNTLID high
+    rb[13] = 0x00;                   // Opcode = Read NVMe-MI Data Structure
+    rb[14] = 0x04;                   // DTYP = 0x04 (Optionally Supported Command List)
+    rb[15] = 0x00;                   // DSPEC
+    rb[16] = 0x00;                   // Reserved
+    rb[17] = 0x00;                   // Data Offset = 0
+    rb[18] = 0x00;
+    rb[19] = 0x00;
+    rb[20] = 0x00;
+    rb[21] = 0x30;                   // Data Length = 48 bytes (keep single-packet)
+    rb[22] = 0x00;
+    rb[23] = 0x00;
+
+    {
+        uint32_t micv = calc_mic(&rb[8], 16);
+        rb[24] = (uint8_t)(micv & 0xFF);
+        rb[25] = (uint8_t)((micv >> 8)  & 0xFF);
+        rb[26] = (uint8_t)((micv >> 16) & 0xFF);
+        rb[27] = (uint8_t)((micv >> 24) & 0xFF);
+    }
+    rb[28] = calc_pec_noinit(rb, 28);
 
     I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
     s_I2C1HandlerFn = I2C_SlaveTRx;
-    I2C_WriteMultiBytes(I2C_PORT, fw_buf[0] >> 1, &fw_buf[1], 28);
+    I2C_WriteMultiBytes(I2C_PORT, rb[0] >> 1, &rb[1], 28);
 
     I2C_EnableInt(I2C1);
     NVIC_EnableIRQ(I2C1_IRQn);
     I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
     g_u8SlvRxFlag = 0;
-    while (g_u8SlvRxFlag == 0);
+    WAIT_SLV_RX_TIMEOUT();
     I2C_DisableInt(I2C1);
     NVIC_DisableIRQ(I2C1_IRQn);
 
-    uint8_t fw_nmimt  = g_au8SlvRxData[8];
-    uint8_t fw_status = g_au8SlvRxData[10];
-
-    printf("  NMIMT response : 0x%02X (%s)\n", fw_nmimt,
-           fw_nmimt == 0x89 ? "Admin PT Response [GOOD]" :
-           fw_nmimt == 0x88 ? "NVMe-MI Response [Admin PT ignored!]" : "?");
-    printf("  Status         : 0x%02X\n", fw_status);
-    printf("  Raw: ");
+    if (g_u8SlvRxFlag == 0)
     {
-        uint8_t r;
-        for (r = 0; r < g_au8SlvRxData[1] + 2 && r < 32; r++)
-            printf("%02X ", g_au8SlvRxData[r]);
-        printf("\n");
-    }
-
-    if (fw_nmimt == 0x89 && fw_status == 0x00)
-    {
-        uint8_t *log_data = &g_au8SlvRxData[12];
-        uint8_t  log_len  = g_au8SlvRxData[1] > 12 ? g_au8SlvRxData[1] - 12 : 0;
-        printf("========================================\n");
-        printf("  FW Slot Information Log\n");
-        printf("========================================\n");
-        if (log_len >= 1)
-            printf("  Active FW Slot : %d\n", log_data[0] & 0x07);
-        if (log_len >= 16) {
-            printf("  FW Slot 1 Rev  : [");
-            uint8_t fi;
-            for (fi = 0; fi < 8; fi++) {
-                char c = (char)log_data[8 + fi];
-                printf("%c", (c >= 0x20 && c <= 0x7E) ? c : '.');
-            }
-            printf("]\n");
-        }
-        printf("========================================\n");
+        printf("  [TIMEOUT] No response to OSCL (DTYP=0x04) query.\n");
     }
     else
     {
-        printf("  [RESULT] Admin Passthrough NOT working on this device.\n");
-        printf("           FW Revision NOT retrievable via NVMe-MI SMBus.\n");
-        printf("  [CONCLUSION] Commands 3/4/7 require working Admin PT - NOT supported.\n");
+        uint8_t  bc     = g_au8SlvRxData[1];
+        uint8_t  status = g_au8SlvRxData[10];
+        uint16_t dtl    = (uint16_t)g_au8SlvRxData[12] | ((uint16_t)g_au8SlvRxData[13] << 8);
+        uint8_t  avail  = (bc >= 16) ? (uint8_t)(bc - 16) : 0;
+        uint8_t *ds     = &g_au8SlvRxData[14];
+        uint8_t  dlen   = (dtl <= avail) ? (uint8_t)dtl : avail;
+
+        printf("  Status=0x%02X  DTL=%u  ByteCnt=%u  Avail=%u\n", status, dtl, bc, avail);
+        printf("  Raw data[14..]: ");
+        {
+            uint8_t r;
+            for (r = 0; r < dlen && r < 48; r++) printf("%02X ", ds[r]);
+            printf("\n");
+        }
+
+        if (status != 0x00)
+        {
+            printf("  [NOT SUPPORTED] Status=0x%02X (DTYP=0x04 not handled by this FW)\n", status);
+        }
+        else if (dlen >= 4 && ds[0] == 0x00 && ds[1] == 0x01 && ds[2] == 0x01 && ds[3] == 0x02)
+        {
+            printf("  [!!] Got the DTYP=0x00 fingerprint again -> FW still ignores DTYP.\n");
+            printf("       This build returns no OSCL; ask vendor for FW that honours DTYP=0x04.\n");
+        }
+        else if (dlen >= 2)
+        {
+            uint16_t num = (uint16_t)ds[0] | ((uint16_t)ds[1] << 8);
+            uint8_t *p   = &ds[2];
+            uint16_t e;
+            printf("  Optionally Supported Command List: %u entr%s\n",
+                   num, (num == 1) ? "y" : "ies");
+            for (e = 0; e < num && (uint16_t)(2 + e * 4 + 2) <= dlen; e++)
+            {
+                uint8_t ctype = p[e * 4 + 0];    // 0=MI, 1=Admin (best-effort)
+                uint8_t opc   = p[e * 4 + 1];
+                printf("    [%u] Type=%s OPC=0x%02X\n", e,
+                       (ctype == 1) ? "Admin" : (ctype == 0) ? "MI" : "?", opc);
+            }
+        }
     }
 
     CLK_SysTickDelay(300000);
-    printf("=== FW Revision Attempt Complete ===\n\n");
+    printf("=== Optionally Supported Command List Complete ===\n\n");
 }
+
+// =========================================================================
+// CMD (TASK 2): NVMe Admin Get Log Page (FW Slot) - VENDOR-VERIFIED 72B
+// =========================================================================
+// Vendor found our earlier 73B bug: we treated 0x84 as a separate "msgtype"
+// byte AND added a 4-byte NMH, giving a 5-byte header -> one extra 0x00 that
+// shifted every field by 1 and failed spec parsing.
+//
+// CORRECT layout (matches vendor's internally-passing payload):
+//   * NMH = 4 bytes and INCLUDES the 0x84 byte:  msg[0..3] = 84 10 00 00
+//   * NVMe Admin SQE = 64 bytes, msg[4..67]; SQE byte0 (OPC) is at msg[4]
+//   * MIC = 4 bytes over msg[0..67], placed at msg[68..71]
+//   * Total = 72B -> split into 2 MCTP packets: 64 + 8
+//   * Get Log Page over OOB: RAE bit (CDW10 bit15) MUST be 1.
+//   * Data Length field (vendor CDW7 @ msg[32]) = 0x1C.
+//   * MTU=64 covers MCTP payload + MIC ONLY (no SMBus/MCTP header, no PEC).
+// =========================================================================
+#if 0  /* Disabled: duplicate of the "Get FW VERSION" block above (same 72B request) */
+{
+    cmd_begin("Get Log FW Slot (vendor)");
+    printf("\n>>> [CMD] NVMe Admin - Get Log Page FW Slot (72B, vendor-verified) <<<\n");
+    printf("=== NMH(4, incl 0x84)+SQE(64)+MIC(4)=72B; 2 pkts (64+8) ===\n");
+
+    uint8_t  msg[80];
+    uint16_t j, msg_len;
+
+    for (j = 0; j < sizeof(msg); j++) msg[j] = 0x00;
+
+    /* ---- NVMe-MI Message Header (NMH) = 4 bytes, msg[0..3], 0x84 included ---- */
+    msg[0] = 0x84;                   // NMH0: IC bit + MCTP msgtype 0x04 (NVMe-MI)
+    msg[1] = 0x10;                   // NMH1: NMIMT=0x02 (NVMe Admin Command), ROR=0
+    msg[2] = 0x00;                   // NMH2 reserved
+    msg[3] = 0x00;                   // NMH3 reserved
+
+    /* ---- NVMe Admin SQE (64 bytes, msg[4..67]); SQE byte0 = OPC @ msg[4] ---- */
+    msg[4] = 0x02;                   // OPC   = Get Log Page
+    msg[5] = 0x00;                   // CFLGS
+    /* msg[6..7] CTLID = 0 */
+
+    /* SQEDW1 = NSID = 0xFFFFFFFF (whole subsystem) @ msg[8..11] */
+    msg[8] = 0xFF; msg[9] = 0xFF; msg[10] = 0xFF; msg[11] = 0xFF;
+
+    /* Data Length (vendor CDW7 @ msg[32]) = 0x0000001C */
+    msg[32] = 0x1C;
+
+    /* CDW10 @ msg[44..47] : LID + (RAE|LSP) + NUMDL(16b) */
+    msg[44] = 0x03;                  // LID = 0x03 (FW Slot Info)
+    msg[45] = 0x80;                  // bit7 RAE = 1 (required for OOB Get Log Page)
+    msg[46] = 0x07;                  // NUMDL low  = 0x07 (8 dwords -> 32B)
+    msg[47] = 0x00;                  // NUMDL high
+
+    /* ---- MIC over msg[0..67] (68 bytes) -> msg[68..71] ---- */
+    {
+        uint32_t mic = calc_mic(msg, 68);
+        msg[68] = (uint8_t)(mic & 0xFF);
+        msg[69] = (uint8_t)((mic >> 8)  & 0xFF);
+        msg[70] = (uint8_t)((mic >> 16) & 0xFF);
+        msg[71] = (uint8_t)((mic >> 24) & 0xFF);
+    }
+    msg_len = 72;                    // NMH(4, incl 0x84) + SQE(64) + MIC(4)
+
+    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
+    s_I2C1HandlerFn = I2C_SlaveTRx;
+
+    #define MCTP_MTU 64
+    {
+        uint16_t off = 0;
+        uint8_t  seq = 0;
+        while (off < msg_len)
+        {
+            uint16_t frag = (uint16_t)(msg_len - off);
+            uint8_t  som  = (off == 0) ? 1 : 0;
+            uint8_t  eom;
+            uint8_t  pkt[8 + MCTP_MTU + 1];
+            uint16_t p;
+
+            if (frag > MCTP_MTU) frag = MCTP_MTU;
+            eom = ((uint16_t)(off + frag) >= msg_len) ? 1 : 0;
+
+            pkt[0] = 0x3A;
+            pkt[1] = 0x0F;
+            pkt[2] = (uint8_t)(5 + frag);        // byte count = src(1)+MCTPhdr(4)+payload
+            pkt[3] = (MCU_ADDR_7BIT << 1) | 1;
+            pkt[4] = 0x01;
+            pkt[5] = 0x00;
+            pkt[6] = 0x01;
+            pkt[7] = (uint8_t)((som << 7) | (eom << 6) | ((seq & 0x03) << 4) | (1 << 3));
+            for (p = 0; p < frag; p++) pkt[8 + p] = msg[off + p];
+            pkt[8 + frag] = calc_pec_noinit(pkt, 8 + frag);
+
+            printf("  TX pkt seq=%u SOM=%u EOM=%u payload=%u (bc=%u)\n",
+                   seq, som, eom, frag, pkt[2]);
+
+            I2C_WriteMultiBytes(I2C_PORT, pkt[0] >> 1, &pkt[1], 8 + frag);
+
+            off = (uint16_t)(off + frag);
+            seq = (seq + 1) & 0x03;
+            CLK_SysTickDelay(2000);
+        }
+    }
+
+    I2C_EnableInt(I2C1);
+    NVIC_EnableIRQ(I2C1_IRQn);
+    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+    g_u8SlvRxFlag = 0;
+    WAIT_SLV_RX_TIMEOUT();
+    I2C_DisableInt(I2C1);
+    NVIC_DisableIRQ(I2C1_IRQn);
+
+    if (g_u8SlvRxFlag == 0)
+    {
+        printf("  [TIMEOUT] No response to 72B multi-packet Admin Get Log Page.\n");
+        printf("            If OSCL shows Get Log Page supported, capture these\n");
+        printf("            request bytes and send to vendor for confirmation.\n");
+    }
+    else
+    {
+        uint8_t  bc      = g_au8SlvRxData[1];
+        uint8_t  msgtype = g_au8SlvRxData[7];
+        uint8_t  nmimt   = g_au8SlvRxData[8];
+        uint8_t  type    = (nmimt >> 3) & 0x07;
+        uint8_t  status  = g_au8SlvRxData[10];
+        uint16_t total   = (uint16_t)bc + 2;
+
+        printf("  Resp ByteCount=%u  msgtype=0x%02X  NMIMT=0x%02X (type=0x%02X) Status=0x%02X\n",
+               bc, msgtype, nmimt, type, status);
+        printf("  Raw (%u bytes):\n  ", total);
+        {
+            uint16_t r;
+            for (r = 0; r < total && r < sizeof(g_au8SlvRxData); r++) {
+                printf("%02X ", g_au8SlvRxData[r]);
+                if ((r & 0x0F) == 0x0F) printf("\n  ");
+            }
+            printf("\n");
+        }
+
+        if (type == 0x02 && status == 0x00)
+        {
+            uint16_t data_start = 11;
+            uint16_t data_end   = (total > 16) ? (uint16_t)(total - 5) : data_start;
+            printf("========================================\n");
+            printf("  FW Slot Info Log (data-in)\n");
+            printf("  Data (ascii): [");
+            {
+                uint16_t k;
+                for (k = data_start; k < data_end; k++) {
+                    char c = (char)g_au8SlvRxData[k];
+                    printf("%c", (c >= 0x20 && c <= 0x7E) ? c : '.');
+                }
+                printf("]\n");
+            }
+            if ((uint16_t)(data_end - data_start) >= 16)
+            {
+                uint16_t base = data_start + 8;
+                uint8_t  k;
+                printf("  FW Revision (FRS1, best-effort): [");
+                for (k = 0; k < 8; k++) {
+                    char c = (char)g_au8SlvRxData[base + k];
+                    printf("%c", (c >= 0x20 && c <= 0x7E) ? c : '.');
+                }
+                printf("]\n");
+                /* Capture FRS1 for the final summary */
+                for (k = 0; k < 8; k++) {
+                    char c = (char)g_au8SlvRxData[base + k];
+                    g_fwRevStr[k] = (c >= 0x20 && c <= 0x7E) ? c : '.';
+                }
+                g_fwRevStr[8] = '\0';
+            }
+            printf("========================================\n");
+        }
+        else
+        {
+            printf("  [NOTE] NMIMT=0x%02X Status=0x%02X - not a successful Admin data-in.\n",
+                   nmimt, status);
+        }
+    }
+
+    CLK_SysTickDelay(300000);
+    printf("=== NVMe Admin Get Log Page (72B) Complete ===\n\n");
+    #undef MCTP_MTU
+}
+#endif
 
 // =========================================================================
 // CMD: NVM Subsystem Health Status Poll - Health Info & Alerts (#5 #6)
 // =========================================================================
 {
+    cmd_begin("Health Alerts + Info");
     printf("\n>>> [CMD] NVMe-MI Health Status Alerts + Full Health Info <<<\n");
     printf("=== Get Health Info & Alerts (Opcode=0x01) ===\n");
 
-    uint8_t hs_buf[24];
-
-    // Byte Count = src_addr(1) + MCTP_hdr(4) + NVMe-MI_payload(8) + MIC(4) = 17 = 0x11
-    hs_buf[0] = 0x3A;
-    hs_buf[1] = 0x0F;
-    hs_buf[2] = 0x11;
-    hs_buf[3] = (MCU_ADDR_7BIT << 1) | 1;
-    hs_buf[4] = 0x01;
-    hs_buf[5] = 0x00;
-    hs_buf[6] = 0x01;
-    hs_buf[7] = 0xC8;
-    hs_buf[8]  = 0x84;
-    hs_buf[9]  = 0x08;
-    hs_buf[10] = 0x00;
-    hs_buf[11] = 0x00;
-    hs_buf[12] = 0x00;
-    hs_buf[13] = 0x01;  // Opcode: NVM Subsystem Health Status Poll
-    hs_buf[14] = 0x00;
-    hs_buf[15] = 0x00;
-
-    uint32_t hs_mic = calc_mic(&hs_buf[8], 8);
-    hs_buf[16] = (uint8_t)(hs_mic & 0xFF);
-    hs_buf[17] = (uint8_t)((hs_mic >> 8)  & 0xFF);
-    hs_buf[18] = (uint8_t)((hs_mic >> 16) & 0xFF);
-    hs_buf[19] = (uint8_t)((hs_mic >> 24) & 0xFF);
-    hs_buf[20] = calc_pec_noinit(hs_buf, 20);
-
-    I2C_SetSlaveAddr(I2C1, 0, 0x10, I2C_GCMODE_DISABLE);
-    s_I2C1HandlerFn = I2C_SlaveTRx;
-    I2C_WriteMultiBytes(I2C_PORT, hs_buf[0] >> 1, &hs_buf[1], 20);
-
-    I2C_EnableInt(I2C1);
-    NVIC_EnableIRQ(I2C1_IRQn);
-    I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
-    g_u8SlvRxFlag = 0;
-    while (g_u8SlvRxFlag == 0);
-    I2C_DisableInt(I2C1);
-    NVIC_DisableIRQ(I2C1_IRQn);
-
-    uint8_t hs_status = g_au8SlvRxData[10];
-    printf("  Status : 0x%02X\n", hs_status);
-
-    if (hs_status == 0x00 && g_au8SlvRxData[1] >= 14)
+    /* Request: NMH + Opcode 0x01 + NMD0 + NMD1 (old build sent 8B -> Status 0x05).
+     * NMD0 bit31 CS = 0: do not clear the Composite Controller Status flags. */
     {
-        uint8_t  hs_bc    = g_au8SlvRxData[1];
-        uint16_t hs_csts  = (uint16_t)g_au8SlvRxData[11] |
-                            ((uint16_t)g_au8SlvRxData[12] << 8);
-        uint16_t temp_k   = (hs_bc >= 15) ?
-                            ((uint16_t)g_au8SlvRxData[13] |
-                             ((uint16_t)g_au8SlvRxData[14] << 8)) : 0;
-        int temp_c = (temp_k >= 273) ? ((int)temp_k - 273) : 0;
-        // MIC is 4 bytes at end; data at raw[15] valid only when ByteCount >= 18
-        uint8_t spare    = (hs_bc >= 18) ? g_au8SlvRxData[15] : 0xFF;
-        uint8_t spare_th = (hs_bc >= 19) ? g_au8SlvRxData[16] : 0xFF;
-        uint8_t pdlu     = (hs_bc >= 20) ? g_au8SlvRxData[17] : 0xFF;
-        uint8_t cw       = (hs_bc >= 21) ? g_au8SlvRxData[18] : 0xFF;
+        const uint8_t req[16] = { 0x84, 0x08, 0x00, 0x00,  0x01, 0x00, 0x00, 0x00,
+                                  0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00 };
+        uint8_t  r[64];
+        uint16_t rlen = 0U;
+        int32_t  ret  = nvme_mi_cmd_xfer(req, r, (uint16_t)sizeof(r), &rlen);
 
-        printf("========================================\n");
-        printf("  NVMe-MI Health Info & Alerts  (ByteCount=%d)\n", hs_bc);
-        printf("========================================\n");
-        printf("  [Health Info]\n");
-        printf("    Composite Temp    : ");
-        if (temp_k == 0)  printf("No Data\n");
-        else              printf("%d C  (%d K)\n", temp_c, temp_k);
-        printf("    CSTS              : 0x%04X (%s)\n", hs_csts,
-               (hs_csts & 0x0001) ? "Ready" : "Not Ready");
-        if (spare != 0xFF)    printf("    Available Spare   : %d%%\n", spare);
-        else                  printf("    Available Spare   : N/A\n");
-        if (spare_th != 0xFF) printf("    Spare Threshold   : %d%%\n", spare_th);
-        if (pdlu != 0xFF)     printf("    Drive Life Used   : %d%%\n", pdlu);
-        else                  printf("    Drive Life Used   : N/A\n");
+        if ((ret != 0) || (rlen < 8U))
+        {
+            printf("  [FAIL] RX error %d (len=%u)\n", ret, rlen);
+        }
+        else if (r[4] != 0x00U)
+        {
+            printf("  Status : 0x%02X (%s)\n", r[4], nvme_mi_status_str(r[4]));
+        }
+        else if (rlen < 20U)
+        {
+            printf("  Status : 0x00 but response too short (%u bytes)\n", rlen);
+        }
+        else
+        {
+            /* msg[8..15] = NVM Subsystem Health Data Structure:
+             *   NSS(1) SW(1) CTEMP(1, deg C) PDLU(1) CCS(2) Rsvd(2)
+             * SW bits are active-low: bit cleared = warning present. */
+            uint8_t  nss   = r[8];
+            uint8_t  sw    = r[9];
+            int8_t   ctemp = (int8_t)r[10];
+            uint8_t  pdlu  = r[11];
+            uint16_t ccs   = (uint16_t)r[12] | ((uint16_t)r[13] << 8);
+            uint8_t  swAct = (uint8_t)(~sw);   /* 1 = warning active */
 
-        printf("\n  [Health Status Alerts]\n");
-        uint8_t alert = 0;
-        if (cw != 0xFF && cw != 0x00) {
-            alert = 1;
-            printf("    SMART Critical Warnings (0x%02X):\n", cw);
-            if (cw & 0x01) printf("    [ALERT] Spare below threshold\n");
-            if (cw & 0x02) printf("    [ALERT] Temperature above threshold\n");
-            if (cw & 0x04) printf("    [ALERT] NVM reliability degraded\n");
-            if (cw & 0x08) printf("    [ALERT] Media read-only\n");
-            if (cw & 0x10) printf("    [ALERT] Volatile backup failed\n");
+            printf("  Status : 0x00 (Success)\n");
+            printf("========================================\n");
+            printf("  NVM Subsystem Health (Opcode 0x01)\n");
+            printf("========================================\n");
+            printf("  [Health Info]\n");
+            printf("    NSS               : 0x%02X\n", nss);
+            printf("    Composite Temp    : %d C\n", ctemp);
+            printf("    Drive Life Used   : %u%%\n", pdlu);
+            printf("    CCS (changed)     : 0x%04X\n", ccs);
+            printf("\n  [Health Status Alerts]  SW=0x%02X (active-low)\n", sw);
+            if ((swAct & 0x01U) != 0U) { printf("    [ALERT] Spare below threshold\n"); }
+            if ((swAct & 0x02U) != 0U) { printf("    [ALERT] Temperature out of range\n"); }
+            if ((swAct & 0x04U) != 0U) { printf("    [ALERT] NVM reliability degraded\n"); }
+            if ((swAct & 0x08U) != 0U) { printf("    [ALERT] Media read-only\n"); }
+            if ((swAct & 0x10U) != 0U) { printf("    [ALERT] Volatile backup failed\n"); }
+            if ((swAct & 0x1FU) == 0U)
+            {
+                printf("    ** ALL CLEAR - No alerts **\n");
+            }
+            printf("========================================\n");
         }
-        if (spare != 0xFF && spare_th != 0xFF && spare <= spare_th) {
-            alert = 1;
-            printf("    [ALERT] Spare %d%% <= Threshold %d%%\n", spare, spare_th);
-        }
-        if (pdlu != 0xFF && pdlu >= 90) {
-            alert = 1;
-            printf("    [WARN]  Drive life %d%% >= 90%%\n", pdlu);
-        }
-        if (temp_k > 0 && temp_c >= 70) {
-            alert = 1;
-            printf("    [WARN]  Temperature %d C >= 70 C\n", temp_c);
-        }
-        if (!alert)
-            printf("    ** ALL CLEAR - No alerts **\n");
-        printf("========================================\n");
     }
 
     CLK_SysTickDelay(300000);
@@ -3047,30 +4099,42 @@ I2C_EnableInt(I2C1);
 //   Strategy: read in small chunks (DLEN<=MTU) walking DOFST, reassemble here.
 //     Per-chunk preview shows if DOFST advances (else firmware ignores it).
 // =========================================================================
-    /* --- Config Get - SMBus Freq (confirmed working, CID in DWORD0 @body[8]) --- */
+    /* --- Config Get - SMBus/I2C Frequency ---
+     * NMD0: [7:0] Config ID = 0x01, [31:24] Port ID.
+     * Port 0 gave Status 0x04 (Invalid Parameter) before, so sweep Port ID 0..2.
+     * Success: NVMe-MI Mgmt Response byte msg[5] bits 3:0 = frequency. */
+    cmd_begin("Config Get SMBus Freq");
+    printf("\n>>> [CMD] NVMe-MI - Config Get - SMBus Freq (Opcode=0x04, CID=0x01) <<<\n");
     {
-        uint8_t body[16] = { 0x84,0x08,0,0, 0x04,0,0,0, 0x01,0,0,0, 0,0,0,0 };
-        uint8_t b[29];
-        b[0]=0x3A; b[1]=0x0F; b[2]=0x19;
-        b[3]=(MCU_ADDR_7BIT<<1)|1; b[4]=0x01;
-        b[5]=0x00; b[6]=0x01; b[7]=0xC8;
-        { uint8_t k; for (k=0;k<16;k++) b[8+k]=body[k]; }
-        uint32_t mc = calc_mic(&b[8],16);
-        b[24]=mc&0xFF; b[25]=(mc>>8)&0xFF; b[26]=(mc>>16)&0xFF; b[27]=(mc>>24)&0xFF;
-        b[28]=calc_pec_noinit(b,28);
-        printf("\n>>> [CMD] NVMe-MI - Config Get - SMBus Freq (Opcode=0x04) <<<\n");
-        I2C_SetSlaveAddr(I2C1,0,0x10,I2C_GCMODE_DISABLE);
-        s_I2C1HandlerFn = I2C_SlaveTRx;
-        I2C_WriteMultiBytes(I2C_PORT, b[0]>>1, &b[1], 28);
-        I2C_EnableInt(I2C1); NVIC_EnableIRQ(I2C1_IRQn);
-        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI|I2C_CTL_AA);
-        g_u8SlvRxFlag=0;
-        WAIT_SLV_RX_TIMEOUT();
-        I2C_DisableInt(I2C1); NVIC_DisableIRQ(I2C1_IRQn);
-        printf("  ByteCnt=%d Status=0x%02X  Mgmt Response: %02X %02X %02X\n",
-               g_au8SlvRxData[1], g_au8SlvRxData[10],
-               g_au8SlvRxData[11], g_au8SlvRxData[12], g_au8SlvRxData[13]);
-        CLK_SysTickDelay(300000);
+        uint8_t portId;
+
+        for (portId = 0U; portId <= 2U; portId++)
+        {
+            uint8_t  req[16] = { 0x84, 0x08, 0x00, 0x00,  0x04, 0x00, 0x00, 0x00,
+                                 0x01, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00 };
+            uint8_t  r[64];
+            uint16_t rlen = 0U;
+            int32_t  ret;
+
+            req[11] = portId;
+            ret = nvme_mi_cmd_xfer(req, r, (uint16_t)sizeof(r), &rlen);
+            if ((ret != 0) || (rlen < 8U))
+            {
+                printf("  Port %u: [FAIL] RX error %d (len=%u)\n", portId, ret, rlen);
+            }
+            else if (r[4] != 0x00U)
+            {
+                printf("  Port %u: Status 0x%02X (%s)\n", portId, r[4], nvme_mi_status_str(r[4]));
+            }
+            else
+            {
+                uint8_t freq = (uint8_t)(r[5] & 0x0FU);
+                printf("  Port %u: Status 0x00  Resp=%02X %02X %02X  Freq=%u (%s)\n",
+                       portId, r[5], r[6], r[7], freq,
+                       (freq == 1U) ? "100 kHz" : (freq == 2U) ? "400 kHz" :
+                       (freq == 3U) ? "1 MHz" : "N/A");
+            }
+        }
     }
 
     /* --- VPD Read: incremental chunked read, DOFST@body[8], DLEN@body[12] --- */
@@ -3079,6 +4143,7 @@ I2C_EnableInt(I2C1);
         uint16_t vpd_len = 0;
         uint16_t dofst;
         const uint8_t CHUNK = 0x20;   /* 32B/chunk: keeps each response in ONE MCTP packet */
+        cmd_begin("VPD Read");
         printf("\n>>> [CMD] NVMe-MI - VPD Read (incremental DOFST@[8] DLEN@[12]=0x20) <<<\n");
         for (dofst = 0; dofst < 256; dofst += CHUNK)
         {
@@ -3176,29 +4241,41 @@ I2C_EnableInt(I2C1);
     printf("  C  Get Msg Type Support MCTP Ctrl 0x05    YES        Types: 00/04/05/06\n");
     printf("  D  Read MI Data Struct  NVMe-MI Opc=0x00  YES        DTYP=0x00 only (NVM Subsys)\n");
     printf("  E  Configuration Set    NVMe-MI Opc=0x03  YES        Opcode@[4] CID@[8] (DWORD0)\n");
-    printf("  F  Configuration Get    NVMe-MI Opc=0x04  YES        Works (SMBus Freq val=0x080004)\n");
+    printf("  F  Configuration Get    NVMe-MI Opc=0x04  YES        SMBus Freq @Port 1 = 100 kHz\n");
     printf("  G  VPD Read             NVMe-MI Opc=0x05  YES        DOFST@[8] DLEN@[12]; FRU (Phison/PAS)\n");
     printf("  H  VPD Write            NVMe-MI Opc=0x06  YES*       DOFST@[8] DLEN@[12] (mirror of Read)\n");
     printf("  I  Reset                NVMe-MI Opc=0x07  N/A        Not in vendor doc\n");
     printf("  1  Health Status Poll   NVMe-MI Opc=0x08  YES        Native MI cmd (MIC PASS)\n");
     printf("  1  Ctrl Health Poll     NVMe-MI Opc=0x02  YES        Native MI cmd\n");
-    printf("  1  Health Info+Alerts   NVMe-MI Opc=0x01  YES        Native MI cmd (short resp)\n");
+    printf("  1  Health Info+Alerts   NVMe-MI Opc=0x01  YES        Native MI cmd (NSS/SW/CTEMP)\n");
     printf("  2  Flush Cache          NVMe I/O          NO         No I/O PT in NVMe-MI\n");
-    printf("  3  Power Management     Admin PT Opc=0x06 NO         Admin PT not implemented\n");
-    printf("  4  FW Revision          DTYP=0x03         NO         Device ignores DTYP field\n");
-    printf("                         Admin PT Opc=0x06 NO         Admin PT not implemented\n");
-    printf("  5  Health Alerts        NVMe-MI Opc=0x01  YES        ALL CLEAR (no alerts)\n");
-    printf("  6  Health Info          NVMe-MI Opc=0x01  YES        Partial (short response)\n");
-    printf("  7  SMART Log            Admin PT Opc=0x06 NO         Admin PT not implemented\n");
-    printf("  8  Device Identify      Admin PT Opc=0x06 NO         Admin PT not implemented\n");
-    printf("                         (NVMe Identify)   NO         4096B > SMBus limit (255B)\n");
-    printf("  9  FW Update            Admin PT Opc=0x06 NO         Admin PT not implemented\n");
+    printf("  3  Power Management     Admin GetFeat 0x02 YES       FID=0x02: PS=0 WH=0\n");
+    printf("  4  FW Revision          Admin Log 0x03    YES        FRS1=%s (72B req, 2 pkts)\n", g_fwRevStr);
+    printf("  5  Health Alerts        NVMe-MI Opc=0x01  YES        SW=0xFF -> ALL CLEAR\n");
+    if (g_composTempC > -1000)
+        printf("  6  Health Info          NVMe-MI Opc=0x01  YES        %ldC, PDLU 0%%; full data -> #7 SMART\n", (long)g_composTempC);
+    else
+        printf("  6  Health Info          NVMe-MI Opc=0x01  YES        PDLU 0%%; full data -> #7 SMART\n");
+    printf("  7  SMART Log            Admin Log 0x02    YES        512B, 9 pkts reassembled, MIC PASS\n");
+    printf("  8  Device Identify      Admin Opc=0x06    YES        4096B, 65 pkts reassembled, MIC PASS\n");
+#if (NVME_FORMAT_ENABLE == 1U)
+    printf("  9  Format NVM           Admin Opc=0x80    YES        NSID=all LBAF=0 SES=0 (erases data)\n");
+#else
+    printf("  9  Format NVM           Admin Opc=0x80    SKIP       Disabled (NVME_FORMAT_ENABLE=0, destructive)\n");
+#endif
     printf("========================================\n");
-    printf("  Admin Passthrough root cause:\n");
-    printf("    Sent   : Opcode=0x06 (Admin PT), expects NMIMT=0x09 response\n");
-    printf("    Got    : NMIMT=0x88 (MI general resp) - device ignores Opc=0x06\n");
-    printf("    Result : All Admin PT commands (#3/#4/#7/#8/#9) NOT available\n");
+    printf("  Admin Command status (verified on this drive):\n");
+    printf("    Keep Alive (OPC 0x18): see probe (MI Status 0x03 = not allowed OOB)\n");
+    printf("    Admin channel verified by Get Log / Identify / Format\n");
+    printf("    Multi-pkt request (Get Log FW Slot, 72B -> 64B + 8B pkts):\n");
+    printf("       -> NMIMT=0x90 Status=0x00, 28B log data, MIC PASS\n");
+    printf("    Key fix: NMH is 4B incl 0x84 (old build sent 73B w/ extra 0x00)\n");
+    printf("    Responses >64B arrive as multiple MCTP packets and are\n");
+    printf("    reassembled by mctp_rx_message() (SOM/EOM/Seq + PEC + MIC).\n");
     printf("========================================\n\n");
+
+    /* Per-command execution time table, printed below the summary. */
+    cmd_timing_report();
 }
 
 

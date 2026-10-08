@@ -94,6 +94,55 @@ extern int FanIC_BackupRegisters(void);
 extern void Set_USB_SerialNumber_From_UID(void);
 extern void nvm_mi_read(void);
 extern void nvm_mi_read_1(void);
+/* Execute one native NVMe-MI command (Config Get / VPD Read) over MCTP/SMBus.
+ * Returns 0 on transport success (check *pu8MiStatus for command status),
+ * negative on transport error. See nvme_mi.c for the full contract. */
+extern int32_t nvme_mi_native_cmd(uint8_t u8SlotIndex, uint8_t u8Opcode,
+                                  uint32_t u32Dword0, uint32_t u32Dword1,
+                                  uint8_t *pu8Out, uint16_t u16MaxOut,
+                                  uint16_t *pu16OutLen, uint8_t *pu8MiStatus);
+/* Execute one NVMe Admin passthrough command over NVMe-MI (NMIMT=2h). Builds a
+ * 64-byte SQE (opcode/NSID/DataLen/CDW10/CDW11), receives the multi-packet
+ * response and copies a window [u16OutOffset, +u16MaxOut) of the returned data
+ * (host paging for logs larger than one USB frame). Returns 0 on transport
+ * success (check *pu8MiStatus), negative on transport error. See nvme_mi.c. */
+extern int32_t nvme_mi_admin_cmd(uint8_t u8SlotIndex, uint8_t u8Opcode, uint32_t u32Nsid,
+                                 uint32_t u32Cdw10, uint32_t u32Cdw11, uint32_t u32DataLen,
+                                 uint16_t u16OutOffset, uint8_t *pu8Out, uint16_t u16MaxOut,
+                                 uint16_t *pu16OutLen, uint16_t *pu16TotalLen, uint8_t *pu8MiStatus);
+/* Execute one MCTP Control command (message type 0x00, no MIC) over MCTP/SMBus.
+ * Command Code 0x03 = Get Endpoint UUID, 0x05 = Get Message Type Support. The
+ * response data (resp[4 .. end)) is copied to pu8Out and the Completion Code to
+ * *pu8CompCode (0 = Success). Returns 0 on transport success, negative on
+ * transport error. See nvme_mi.c. */
+extern int32_t nvme_mi_mctp_ctrl_cmd(uint8_t u8SlotIndex, uint8_t u8CmdCode,
+                                     uint8_t *pu8Out, uint16_t u16MaxOut,
+                                     uint16_t *pu16OutLen, uint8_t *pu8CompCode);
+/* Execute an NVMe Admin Get Features command (opcode 0x0A) over NVMe-MI. No
+ * data payload; the feature value is returned in the CQE DWORD0 (*pu32Result).
+ * CDW10 = FID | (SEL << 8). *pu8Sc receives the NVMe command Status Code.
+ * Returns 0 on transport success (check *pu8MiStatus / *pu8Sc). See nvme_mi.c. */
+extern int32_t nvme_mi_admin_get_feature(uint8_t u8SlotIndex, uint8_t u8Fid, uint8_t u8Sel,
+                                         uint32_t *pu32Result, uint8_t *pu8MiStatus,
+                                         uint8_t *pu8Sc);
+/* Execute one native NVMe-MI Command Set write (e.g. VPD Write, Opcode 0x06)
+ * that appends u16DataLen data bytes after the request DWORDs and before the
+ * MIC. The response payload (resp[5 .. end-MIC)) is copied to pu8Out and the
+ * NVMe-MI Status byte to *pu8MiStatus (0 = Success). Returns 0 on transport
+ * success, negative on transport error. See nvme_mi.c. */
+extern int32_t nvme_mi_native_write_cmd(uint8_t u8SlotIndex, uint8_t u8Opcode,
+                                        uint32_t u32Dword0, uint32_t u32Dword1,
+                                        const uint8_t *pu8Data, uint16_t u16DataLen,
+                                        uint8_t *pu8Out, uint16_t u16MaxOut,
+                                        uint16_t *pu16OutLen, uint8_t *pu8MiStatus);
+/* !!! DESTRUCTIVE: erases all user data. !!! Execute an NVMe Admin Format NVM
+ * command (Admin opcode 0x80) over NVMe-MI. No data payload; the CQE Status
+ * Code is returned in *pu8Sc (0 = Success) and the NVMe-MI Status byte in
+ * *pu8MiStatus. The receive is retried because Format can be slow. Returns 0 on
+ * transport success, negative on transport error. See nvme_mi.c. */
+extern int32_t nvme_mi_admin_format_nvm(uint8_t u8SlotIndex, uint32_t u32Nsid,
+                                        uint32_t u32Cdw10, uint8_t *pu8MiStatus,
+                                        uint8_t *pu8Sc);
 extern float show_temperature(uint8_t h_bytem, uint8_t l_byte);
 extern void show_cpld_information(uint8_t *p_buf);
 extern void print_nvme_basic_management_info(uint8_t *data);

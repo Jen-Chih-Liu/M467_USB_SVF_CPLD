@@ -1172,8 +1172,8 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x07;
-                response_buff[2] = 0x29;
+                response_buff[1] = 0x09;
+                response_buff[2] = 0x30;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
@@ -1571,6 +1571,579 @@ cpld1_init:
 
                 if (usb_rcvbuf[1] == 48)
                     response_buff[1] = PB6;
+
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+            }
+
+            /* -----------------------------------------------------------------
+             * Command 0xe0 : m463 NVMe-MI single-command execution.
+             *   Request  : [0]=0xe0 [1]=NVMe index (0-based) [2]=CommandID(1..19)
+             *              [3..6]=Dword0 (little-endian) [7..10]=Dword1 (little-endian)
+             *   Response : [0]=0xe0 [1]=CommandID [2]=Status(0=OK,1=Fail)
+             *              [3]=Data byte count (success only)
+             *              [4..]=raw data bytes (success) OR
+             *                    null-terminated ASCII reason (fail)
+             *
+             * CommandID map (matches host m463 NVMEMI list):
+             *   1 Basic Management     2 Get Endpoint UUID   3 Get Msg Type Support
+             *   4 Read MI Data Struct  5 Configuration Set   6 Configuration Get
+             *   7 VPD Read             8 VPD Write           9 Reset (unsupported)
+             *  10 Health Status Poll  11 Ctrl Health Poll   12 Health Info+Alerts
+             *  13 Power Management    14 FW Revision        15 Health Alerts
+             *  16 Health Info         17 SMART Log          18 Device Identify
+             *  19 Format NVM
+             *
+             * Only CommandID 1 (Basic Management) is implemented in production
+             * firmware; it returns the 32-byte Basic Management structure cached
+             * in bmc_report[]. CommandID 2..19 are MCTP/NVMe-MI over-SMBus
+             * commands whose full reference implementation lives in
+             * main_mctp_test.c and has not yet been ported here, so they return
+             * Status=Fail with a reason string.
+             * ----------------------------------------------------------------- */
+            if (usb_rcvbuf[0] == 0xe0)
+            {
+                uint8_t nvme_index = usb_rcvbuf[1];
+                uint8_t cmd_id     = usb_rcvbuf[2];
+                uint8_t status     = 0x01; /* default Fail */
+                uint8_t data_cnt   = 0;
+
+                /* NVMe-MI Management Request Dword0/Dword1 (little-endian).
+                 * Parsed here so ported command implementations can consume them
+                 * (e.g. VPD DOFST/DLEN, Config ID/Port, DTYP). Currently unused
+                 * by the CommandID 1 path and the not-implemented skeleton. */
+                uint32_t dword0 = (uint32_t)usb_rcvbuf[3]
+                                | ((uint32_t)usb_rcvbuf[4] << 8)
+                                | ((uint32_t)usb_rcvbuf[5] << 16)
+                                | ((uint32_t)usb_rcvbuf[6] << 24);
+                uint32_t dword1 = (uint32_t)usb_rcvbuf[7]
+                                | ((uint32_t)usb_rcvbuf[8] << 8)
+                                | ((uint32_t)usb_rcvbuf[9] << 16)
+                                | ((uint32_t)usb_rcvbuf[10] << 24);
+
+                for (i = 0; i < 1024; i++)
+                {
+                    response_buff[i] = 0;
+                }
+
+                response_buff[0] = 0xe0;
+                response_buff[1] = cmd_id;
+
+                if (cmd_id == 1)
+                {
+                    /* Basic Management - data cached in bmc_report[]. */
+                    if (nvme_index < 24)
+                    {
+                        uint16_t base = (uint16_t)(NVME_MEM_OFFSET + (nvme_index * NVME_READ_COUNT));
+                        data_cnt = NVME_READ_COUNT;
+
+                        for (i = 0; i < data_cnt; i++)
+                        {
+                            response_buff[4 + i] = bmc_report[base + i];
+                        }
+
+                        status = 0x00; /* Success */
+                    }
+                    else
+                    {
+                        const char *reason = "NVMe index out of range (0..23)";
+                        uint16_t k;
+
+                        for (k = 0; reason[k] != '\0' && k < 200; k++)
+                        {
+                            response_buff[4 + k] = (uint8_t)reason[k];
+                        }
+
+                        status = 0x01; /* Fail */
+                    }
+                }
+                else if (cmd_id == 4  || cmd_id == 5  || cmd_id == 6 ||
+                         cmd_id == 7  || cmd_id == 10 || cmd_id == 11 ||
+                         cmd_id == 12 || cmd_id == 15 || cmd_id == 16)
+                {
+                    /* Native single-slot NVMe-MI Command Set commands executed
+                     * over MCTP/SMBus by nvme_mi_native_cmd() in nvme_mi.c.
+                     * All use NMIMT=1h (NVMe-MI Command); only the opcode and
+                     * the Management Request DWORD0/DWORD1 differ:
+                     *   CmdID  4 : Read NVMe-MI Data Structure     (Opcode 0x00)
+                     *              Dword0 [15:0]=CTRLID, [23:16]=PORTID, [31:24]=DTYP
+                     *   CmdID  6 : Configuration Get               (Opcode 0x04)
+                     *              Dword0 [7:0]=Config ID, [31:24]=Port ID
+                     *   CmdID  7 : VPD Read                        (Opcode 0x05)
+                     *              Dword0 [15:0]=DOFST, Dword1 [7:0]=DLEN
+                     *   CmdID 10 : NVM Subsystem Health Status Poll(Opcode 0x01)
+                     *              Dword1 bit31=Clear Status
+                     *   CmdID 11 : Controller Health Status Poll   (Opcode 0x02)
+                     *              Dword0 [15:0]=SCTLID, [23:16]=MAXRENT, [31:24]=flags
+                     *   CmdID 12 : Health Info + Alerts            (Opcode 0x01)
+                     *              Same NVM Subsystem Health Status Poll response;
+                     *              carries Composite Controller Status (alerts) +
+                     *              temperature + drive-life. Dword1 bit31=Clear
+                     *   CmdID 15 : Health Alerts                    (Opcode 0x01)
+                     *   CmdID 16 : Health Info                      (Opcode 0x01)
+                     *              Both are NVM Subsystem Health Status Poll
+                     *              variants (alert flags / health fields).
+                     *   CmdID  5 : Configuration Set                (Opcode 0x03)
+                     *              Dword0 [7:0]=Config ID, [31:8]=value.
+                     *              WRITE: changes device config (host controls
+                     *              the exact Config ID + value via Dword0/1). */
+                    uint8_t  opcode;
+                    uint8_t  mi_status = 0xFF;
+                    uint16_t out_len   = 0;
+                    uint32_t d0        = dword0;
+                    uint32_t d1        = dword1;
+                    int32_t  rc;
+
+                    switch (cmd_id)
+                    {
+                        case 4:  opcode = 0x00; break; /* Read MI Data Structure */
+                        case 10: opcode = 0x01; break; /* NVM Subsys Health Poll */
+                        case 12: opcode = 0x01; break; /* Health Info + Alerts   */
+                        case 15: opcode = 0x01; break; /* Health Alerts          */
+                        case 16: opcode = 0x01; break; /* Health Info            */
+                        case 11: opcode = 0x02; break; /* Ctrl Health Poll       */
+                        case 5:  opcode = 0x03; break; /* Configuration Set      */
+                        case 6:  opcode = 0x04; break; /* Configuration Get      */
+                        default: opcode = 0x05; break; /* 7 = VPD Read           */
+                    }
+
+                    /* VPD Read: default DLEN to 0x20 (one MCTP packet) when the
+                     * host does not specify Dword1, so a bare "NVMEMI 7 <idx>"
+                     * still returns a chunk of VPD. */
+                    if (cmd_id == 7 && d1 == 0)
+                        d1 = 0x20;
+
+                    /* Controller Health Status Poll: default to the reference
+                     * request (MAXRENT=1, ALL controllers + all include flags,
+                     * SCTLID=0 => Dword0 = 0x87010000) when the host passes 0,
+                     * so a bare "NVMEMI 11 <idx>" returns one controller entry. */
+                    if (cmd_id == 11 && d0 == 0)
+                        d0 = 0x87010000;
+
+                    rc = nvme_mi_native_cmd((uint8_t)nvme_index, opcode, d0, d1,
+                                            (uint8_t *)&response_buff[4], 200, &out_len, &mi_status);
+
+                    if (rc != 0)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe-MI transport error (%d)", (int)rc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (mi_status != 0x00)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe-MI Status 0x%02X", mi_status);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        data_cnt = (out_len > 200) ? 200 : (uint8_t)out_len;
+                        status = 0x00; /* Success */
+                    }
+                }
+                else if (cmd_id == 14 || cmd_id == 17 || cmd_id == 18)
+                {
+                    /* NVMe Admin passthrough commands over NVMe-MI (NMIMT=2h),
+                     * executed by nvme_mi_admin_cmd() in nvme_mi.c:
+                     *   CmdID 14 : FW Revision   - Get Log Page, FW Slot Info
+                     *              (LID 0x03, 64B). FW rev string = data[8..15].
+                     *   CmdID 17 : SMART Log     - Get Log Page, SMART / Health
+                     *              (LID 0x02, 512B).
+                     *   CmdID 18 : Device Identify - Identify Controller
+                     *              (Opcode 0x06, CNS 0x01, 4096B).
+                     * The response can exceed one USB frame, so Dword0 is used
+                     * as a byte offset into the returned data for host paging;
+                     * each call returns up to 200 bytes from that offset. */
+                    uint8_t  opcode;
+                    uint32_t nsid  = 0;
+                    uint32_t cdw10 = 0;
+                    uint32_t cdw11 = 0;
+                    uint32_t dlen  = 0;
+                    uint16_t out_off   = (uint16_t)dword0; /* paging byte offset */
+                    uint8_t  mi_status = 0xFF;
+                    uint16_t out_len   = 0;
+                    uint16_t total_len = 0;
+                    int32_t  rc;
+
+                    switch (cmd_id)
+                    {
+                        case 14: /* Get Log Page - FW Slot Info (LID 0x03, 64B) */
+                            opcode = 0x02;
+                            nsid   = 0xFFFFFFFF;
+                            dlen   = 64;
+                            cdw10  = 0x000F8003; /* LID=0x03, RAE=1, NUMDL=0x000F (64B) */
+                            break;
+                        case 17: /* Get Log Page - SMART / Health (LID 0x02, 512B) */
+                            opcode = 0x02;
+                            nsid   = 0xFFFFFFFF;
+                            dlen   = 512;
+                            cdw10  = 0x007F8002; /* LID=0x02, RAE=1, NUMDL=0x007F (512B) */
+                            break;
+                        default: /* 18: Identify Controller (CNS 0x01, 4096B) */
+                            opcode = 0x06;
+                            nsid   = 0;
+                            dlen   = 4096;
+                            cdw10  = 0x00000001; /* CNS=0x01 (Identify Controller) */
+                            break;
+                    }
+
+                    rc = nvme_mi_admin_cmd((uint8_t)nvme_index, opcode, nsid,
+                                           cdw10, cdw11, dlen, out_off,
+                                           (uint8_t *)&response_buff[4], 200,
+                                           &out_len, &total_len, &mi_status);
+
+                    if (rc != 0)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe Admin transport error (%d)", (int)rc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (mi_status != 0x00)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe Admin Status 0x%02X", mi_status);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        data_cnt = (out_len > 200) ? 200 : (uint8_t)out_len;
+                        status = 0x00; /* Success */
+                    }
+                }
+                else if (cmd_id == 2 || cmd_id == 3)
+                {
+                    /* MCTP Control commands (message type 0x00, no MIC),
+                     * executed by nvme_mi_mctp_ctrl_cmd() in nvme_mi.c:
+                     *   CmdID 2 : Get Endpoint UUID        (Cmd Code 0x03)
+                     *             Response = 16-byte RFC4122 UUID.
+                     *   CmdID 3 : Get Message Type Support (Cmd Code 0x05)
+                     *             Response = type count + supported MCTP
+                     *             message types (e.g. 00/04/05/06). */
+                    uint8_t  cmd_code  = (cmd_id == 2) ? 0x03 : 0x05;
+                    uint8_t  comp_code = 0xFF;
+                    uint16_t out_len   = 0;
+                    int32_t  rc;
+
+                    rc = nvme_mi_mctp_ctrl_cmd((uint8_t)nvme_index, cmd_code,
+                                               (uint8_t *)&response_buff[4], 200,
+                                               &out_len, &comp_code);
+
+                    if (rc != 0)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "MCTP Control transport error (%d)", (int)rc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (comp_code != 0x00)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "MCTP Control Completion 0x%02X", comp_code);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        data_cnt = (out_len > 200) ? 200 : (uint8_t)out_len;
+                        status = 0x00; /* Success */
+                    }
+                }
+                else if (cmd_id == 13)
+                {
+                    /* Power Management - NVMe Admin Get Features (opcode 0x0A,
+                     * FID 0x02, SEL 0 = current), executed by
+                     * nvme_mi_admin_get_feature() in nvme_mi.c. Get Features
+                     * transfers no data; the value is returned in the CQE
+                     * DWORD0: Power State in bits [4:0], Workload Hint in
+                     * bits [7:5]. The 4-byte DWORD0 (little-endian) is returned
+                     * to the host as the response data. */
+                    uint32_t dw0       = 0;
+                    uint8_t  mi_status = 0xFF;
+                    uint8_t  sc        = 0xFF;
+                    int32_t  rc;
+
+                    rc = nvme_mi_admin_get_feature((uint8_t)nvme_index, 0x02, 0x00,
+                                                   &dw0, &mi_status, &sc);
+
+                    if (rc != 0)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe Admin transport error (%d)", (int)rc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (mi_status != 0x00)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe Admin Status 0x%02X", mi_status);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (sc != 0x00)
+                    {
+                        char rbuf[64];
+                        uint16_t k;
+
+                        sprintf(rbuf, "NVMe Status 0x%02X", sc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        response_buff[4] = (uint8_t)(dw0 & 0xFF);
+                        response_buff[5] = (uint8_t)((dw0 >> 8) & 0xFF);
+                        response_buff[6] = (uint8_t)((dw0 >> 16) & 0xFF);
+                        response_buff[7] = (uint8_t)((dw0 >> 24) & 0xFF);
+                        data_cnt = 4;
+                        status = 0x00; /* Success */
+                    }
+                }
+                else if (cmd_id == 8)
+                {
+                    /* VPD Write - native NVMe-MI Command Set write (Opcode 0x06).
+                     *   Dword0 [15:0] = DOFST (write offset)
+                     *   Dword1 [7:0]  = DLEN  (number of data bytes)
+                     * The host carries the write payload in the USB request
+                     * after the two DWORDs: usb_rcvbuf[11] = data byte count,
+                     * usb_rcvbuf[12..] = the data bytes. DLEN is taken from the
+                     * carried byte count so the wire DLEN always matches the
+                     * payload actually appended. WRITE: modifies the drive's
+                     * VPD/FRU contents. */
+                    uint8_t  wr_data[180];
+                    uint8_t  wr_len    = usb_rcvbuf[11];
+                    uint16_t dofst     = (uint16_t)(dword0 & 0xFFFF);
+                    uint8_t  out_buf[8];
+                    uint16_t out_len   = 0;
+                    uint8_t  mi_status = 0xFF;
+                    int32_t  rc;
+                    uint16_t k;
+
+                    if (wr_len > sizeof(wr_data))
+                        wr_len = sizeof(wr_data);
+                    for (k = 0; k < wr_len; k++)
+                        wr_data[k] = usb_rcvbuf[12 + k];
+
+                    rc = nvme_mi_native_write_cmd((uint8_t)nvme_index, 0x06,
+                                                  (uint32_t)dofst, (uint32_t)wr_len,
+                                                  wr_data, wr_len,
+                                                  out_buf, (uint16_t)sizeof(out_buf),
+                                                  &out_len, &mi_status);
+
+                    if (rc != 0)
+                    {
+                        char rbuf[64];
+
+                        sprintf(rbuf, "NVMe-MI transport error (%d)", (int)rc);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else if (mi_status != 0x00)
+                    {
+                        char rbuf[64];
+
+                        sprintf(rbuf, "NVMe-MI Status 0x%02X", mi_status);
+                        for (i = 0; i < 1024; i++)
+                            response_buff[i] = 0;
+                        response_buff[0] = 0xe0;
+                        response_buff[1] = cmd_id;
+                        for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)rbuf[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        /* Success: echo any response payload (usually empty). */
+                        for (k = 0; k < out_len && k < 200; k++)
+                            response_buff[4 + k] = out_buf[k];
+                        data_cnt = (uint8_t)out_len;
+                        status = 0x00; /* Success */
+                    }
+                }
+                else if (cmd_id == 19)
+                {
+                    /* Format NVM - NVMe Admin Format NVM (opcode 0x80).
+                     * !!! DESTRUCTIVE: erases all user data on the drive. !!!
+                     *   Dword0 = CDW10 (LBAF/MSET/PI/PIL/SES; 0 = default)
+                     *   Dword1 = safety confirmation, MUST equal 0x464D5421
+                     *            ("FMT!") or the command is refused. This guards
+                     *            against accidental erasure from a stray call.
+                     * NSID is fixed to 0xFFFFFFFF (all namespaces). The result
+                     * is a CQE; SC/SCT are decoded by nvme_mi_admin_format_nvm(). */
+                    const uint32_t FORMAT_CONFIRM = 0x464D5421U; /* "FMT!" */
+
+                    if (dword1 != FORMAT_CONFIRM)
+                    {
+                        const char *reason =
+                            "Format NVM refused: set Dword1=0x464D5421 to confirm erase";
+                        uint16_t k;
+
+                        for (k = 0; reason[k] != '\0' && k < 200; k++)
+                            response_buff[4 + k] = (uint8_t)reason[k];
+                        status = 0x01; /* Fail */
+                    }
+                    else
+                    {
+                        uint8_t  mi_status = 0xFF;
+                        uint8_t  sc        = 0xFF;
+                        int32_t  rc;
+
+                        rc = nvme_mi_admin_format_nvm((uint8_t)nvme_index, 0xFFFFFFFFU,
+                                                      dword0, &mi_status, &sc);
+
+                        if (rc != 0)
+                        {
+                            char rbuf[64];
+                            uint16_t k;
+
+                            sprintf(rbuf, "NVMe Admin transport error (%d)", (int)rc);
+                            for (i = 0; i < 1024; i++)
+                                response_buff[i] = 0;
+                            response_buff[0] = 0xe0;
+                            response_buff[1] = cmd_id;
+                            for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                                response_buff[4 + k] = (uint8_t)rbuf[k];
+                            status = 0x01; /* Fail */
+                        }
+                        else if (mi_status != 0x00)
+                        {
+                            char rbuf[64];
+                            uint16_t k;
+
+                            sprintf(rbuf, "NVMe Admin Status 0x%02X", mi_status);
+                            for (i = 0; i < 1024; i++)
+                                response_buff[i] = 0;
+                            response_buff[0] = 0xe0;
+                            response_buff[1] = cmd_id;
+                            for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                                response_buff[4 + k] = (uint8_t)rbuf[k];
+                            status = 0x01; /* Fail */
+                        }
+                        else if (sc != 0x00)
+                        {
+                            char rbuf[64];
+                            uint16_t k;
+
+                            sprintf(rbuf, "NVMe Status 0x%02X", sc);
+                            for (i = 0; i < 1024; i++)
+                                response_buff[i] = 0;
+                            response_buff[0] = 0xe0;
+                            response_buff[1] = cmd_id;
+                            for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                                response_buff[4 + k] = (uint8_t)rbuf[k];
+                            status = 0x01; /* Fail */
+                        }
+                        else
+                        {
+                            /* Success: report the SC (0) as a single status byte. */
+                            response_buff[4] = sc;
+                            data_cnt = 1;
+                            status = 0x00; /* Success */
+                        }
+                    }
+                }
+                else if (cmd_id >= 2 && cmd_id <= 19)
+                {
+                    const char *reason =
+                        "NVMe-MI command not implemented in firmware (see main_mctp_test.c)";
+                    uint16_t k;
+
+                    for (k = 0; reason[k] != '\0' && k < 200; k++)
+                    {
+                        response_buff[4 + k] = (uint8_t)reason[k];
+                    }
+
+                    status = 0x01; /* Fail */
+                }
+                else
+                {
+                    const char *reason = "Invalid CommandID (must be 1..19)";
+                    uint16_t k;
+
+                    for (k = 0; reason[k] != '\0' && k < 200; k++)
+                    {
+                        response_buff[4 + k] = (uint8_t)reason[k];
+                    }
+
+                    status = 0x01; /* Fail */
+                }
+
+                response_buff[2] = status;
+                response_buff[3] = data_cnt;
 
                 for (i = 0; i < 1024; i++)
                 {
