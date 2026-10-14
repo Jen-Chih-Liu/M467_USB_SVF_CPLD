@@ -125,8 +125,30 @@ def build_write_cases(index):
         8: ("VPD Write (offset 0, 1 byte)", [idx, "0x00000000", "0x00"]),
 
         # 19 Format NVM：Admin opcode 0x80。**極度破壞性：抹除所有使用者資料**。
-        #    Dword0=CDW10（0=預設），Dword1 必須=0x464D5421 ("FMT!") 才會執行。
-        19: ("Format NVM (CDW10=0, 需確認碼)", [idx, "0x00000000", "0x464D5421"]),
+        #    Dword0=CDW10，Dword1 必須=0x464D5421 ("FMT!") 才會執行。
+        #    CDW10 欄位配置（NVMe Base Spec）：
+        #      bits[3:0]  = LBAF (LBA Format index)
+        #      bit[4]     = MSET (Metadata Settings)
+        #      bits[7:5]  = PI   (Protection Information)
+        #      bit[8]     = PIL  (Protection Information Location)
+        #      bits[10:9] = SES  (Secure Erase Settings) ← 注意是 2-bit 欄位，
+        #                   從 bit9 開始，不是 bit8！之前誤用 0x100(bit8=PIL)
+        #                   導致 SES 仍為 0，等同沒有要求安全抹除。
+        #    SES 數值意義：
+        #      0 = No secure erase requested（只重建/套用 LBA Format，規格不保證
+        #          抹除既有使用者資料，很多控制器只是重置 FTL mapping table，
+        #          實體 flash 內容可能原封不動——這是格式化回報 Success 後，
+        #          之前寫入的測試檔仍「看得到/讀得到」的根本原因）。CDW10=0x00000000
+        #      1 = User Data Erase（規格要求保證清除所有使用者資料，這裡預設用這個，
+        #          依磁碟容量可能耗時數秒至數分鐘）。CDW10=0x00000200 (bit9=1)
+        #      2 = Cryptographic Erase（直接銷毀 AES 金鑰，毫秒級完成；僅限控制器
+        #          Identify 的 FNA bit2=1 才支援）。CDW10=0x00000400 (bit10=1)
+        #    dword0 = 0x00000200 → LBAF=0, SES=1 (User Data Erase)
+        #    注意：SES=1 的實際抹除可能耗時遠超過 SES=0 的「假格式化」，韌體若在
+        #    retry 逾時前仍未收到磁碟回應，會回報 Status="InProgress"（非失敗），
+        #    此時請改用 CmdID 1 / 17 輪詢，直到該指令回報 Status="Success" 為止。
+        19: ("Format NVM (SES=1 User Data Erase, 需確認碼)",
+             [idx, "0x00000200", "0x464D5421"]),
     }
 
 

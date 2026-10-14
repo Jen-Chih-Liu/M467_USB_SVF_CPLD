@@ -1072,7 +1072,15 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
         /* Bank 1: second CPLD's drives on UI2C0. Only valid when the second
          * CPLD is present (UI2C0 pins + UI2C0_Init done in main.c). */
         if (g_u32clpd_lost != 0U)
+        {
+					#if 0
+            printf("[NVME DBG] slot=%u bank0Count=%u g_u32clpd_lost=%lu -> bank1 rejected\r\n",
+                   (unsigned int)u8SlotIndex,
+                   (unsigned int)u8Bank0Count,
+                   (unsigned long)g_u32clpd_lost);
+					#endif
             return 0;
+        }
 
         s_mctpBus   = 1U;
         u8LocalSlot = (uint8_t)(u8SlotIndex - u8Bank0Count);
@@ -1080,9 +1088,25 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
 
     u8MuxIndex     = u8LocalSlot / u8ChannelsPerMux;
     u8ChannelOnMux = u8LocalSlot % u8ChannelsPerMux;
+#if 0
+    printf("[NVME DBG] slot=%u bank0Count=%u local=%u bus=%s mux=%u ch=%u lost=%lu\r\n",
+           (unsigned int)u8SlotIndex,
+           (unsigned int)u8Bank0Count,
+           (unsigned int)u8LocalSlot,
+           (s_mctpBus == 0U) ? "I2C1" : "UI2C0",
+           (unsigned int)u8MuxIndex,
+           (unsigned int)u8ChannelOnMux,
+           (unsigned long)g_u32clpd_lost);
+		#endif
 
     if (u8MuxIndex >= u8MuxCount)
+    {
+        printf("[NVME DBG] slot=%u mux out of range: mux=%u count=%u\r\n",
+               (unsigned int)u8SlotIndex,
+               (unsigned int)u8MuxIndex,
+               (unsigned int)u8MuxCount);
         return 0;
+    }
 
     if (s_mctpBus == 0U)
     {

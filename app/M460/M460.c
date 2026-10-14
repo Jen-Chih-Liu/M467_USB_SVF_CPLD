@@ -3198,17 +3198,25 @@ int handle_nvmemi(int count, int argc, char* argv[]) {
         cJSON_AddStringToObject(data, "Raw data", raw_buf);
         cJSON_AddItemToObject(root, "Data", data);
     }
-    else if (cmd_id == 19 && strstr(result.error, "NVMe Admin Status 0x01") != NULL) {
-        // Format NVM returned NVMe-MI Status 0x01 ("More Processing Required"):
-        // the drive accepted the command and is still formatting in the
-        // background. This is NOT a failure - report it distinctly and tell
-        // the caller how to poll for completion with a different, lightweight
+    else if (cmd_id == 19 &&
+             (strstr(result.error, "NVMe Admin Status 0x01") != NULL ||
+              strstr(result.error, "NVMe Admin transport error (-2)") != NULL)) {
+        // Format NVM reported either:
+        //   - NVMe-MI Status 0x01 ("More Processing Required"): the drive
+        //     acknowledged the command and is still formatting, or
+        //   - transport error (-2): the drive never replied within the
+        //     firmware's retry budget, which happens when CDW10 requests a
+        //     real data erase (SES=1/2) that takes longer than a quick
+        //     metadata-only reformat (SES=0).
+        // Neither is a hard failure - report it distinctly and tell the
+        // caller how to poll for completion with a different, lightweight
         // read-only command instead of re-issuing Format NVM.
         cJSON_AddStringToObject(root, "Status", "InProgress");
         cJSON* data = cJSON_CreateObject();
         cJSON_AddStringToObject(data, "Reason",
-            "Drive returned 'More Processing Required' (NVMe-MI Status 0x01): "
-            "Format NVM is still running in the background on this drive.");
+            "Format NVM is still running in the background on this drive "
+            "(NVMe-MI Status 0x01 'More Processing Required', or the drive "
+            "did not reply within the retry budget while erasing).");
         cJSON_AddStringToObject(data, "Hint",
             "This is expected while formatting is in progress, not an error. "
             "Do NOT re-run Format NVM. Instead, poll the drive with a different, "
@@ -3237,7 +3245,9 @@ int handle_nvmemi(int count, int argc, char* argv[]) {
 
     if (ret == 0 && result.status == 0x00)
         return 0;  // Success
-    if (cmd_id == 19 && strstr(result.error, "NVMe Admin Status 0x01") != NULL)
+    if (cmd_id == 19 &&
+        (strstr(result.error, "NVMe Admin Status 0x01") != NULL ||
+         strstr(result.error, "NVMe Admin transport error (-2)") != NULL))
         return 2;  // Format NVM still in progress (not a failure)
     return -1;     // Failure
 }

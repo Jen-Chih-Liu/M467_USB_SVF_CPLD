@@ -1172,8 +1172,8 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x09;
-                response_buff[2] = 0x30;
+                response_buff[1] = 0x10;
+                response_buff[2] = 0x12;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
@@ -2065,7 +2065,33 @@ cpld1_init:
                         rc = nvme_mi_admin_format_nvm((uint8_t)nvme_index, 0xFFFFFFFFU,
                                                       dword0, &mi_status, &sc);
 
-                        if (rc != 0)
+                        if (rc == -2)
+                        {
+                            /* The request was sent, but the drive did not send any
+                             * MCTP reply within the full retry budget. This is
+                             * expected when CDW10 requests a real data erase
+                             * (SES=1/2): the controller can stay busy erasing for
+                             * much longer than a quick metadata-only reformat
+                             * (SES=0), so it never gets a chance to ACK before we
+                             * give up waiting. Report this distinctly (not a hard
+                             * failure) so the host can poll for completion instead
+                             * of assuming the drive rejected the command. */
+                            char rbuf[160];
+                            uint16_t k;
+
+                            sprintf(rbuf,
+                                   "NVMe Admin transport error (-2): drive did not "
+                                   "reply within the format retry budget; the erase "
+                                   "may still be running in the background");
+                            for (i = 0; i < 1024; i++)
+                                response_buff[i] = 0;
+                            response_buff[0] = 0xe0;
+                            response_buff[1] = cmd_id;
+                            for (k = 0; rbuf[k] != '\0' && k < 200; k++)
+                                response_buff[4 + k] = (uint8_t)rbuf[k];
+                            status = 0x01; /* Fail (host reinterprets as InProgress) */
+                        }
+                        else if (rc != 0)
                         {
                             char rbuf[64];
                             uint16_t k;
