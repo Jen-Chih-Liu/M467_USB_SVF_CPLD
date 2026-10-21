@@ -1173,7 +1173,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x10;
-                response_buff[2] = 0x12;
+                response_buff[2] = 0x20;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.

@@ -38,7 +38,7 @@ m460bsp/
 ## Hardware Requirements
 - **MCU:** Nuvoton M460 series (e.g., M467).
 - **Peripherals:**
-    - **I2C0:** CPLD1, NCT7363Y fan controllers (0x44 / 0x46), temperature sensor (0x30), EEPROM (0xAE).
+    - **I2C0:** CPLD1, NCT7363Y fan controllers (0x40 / 0x42 / 0x44 / 0x46), temperature sensor (0x30), EEPROM (0xAE).
     - **I2C1:** I²C MUX (TCA9548 / PCA9848) for NVMe SMBus access.
     - **I2C2:** CPLD2 (PA10=SDA, PA11=SCL), EEPROM2 — used when a second CPLD is detected.
     - **UI2C0 (USCI0):** NVMe MI interface (PB13=DAT0, PB12=CLK).
@@ -120,7 +120,7 @@ The `[1]` NVMe index is a **flat, 0-based** number across both CPLD banks:
 - Slots `0 .. (bmc_report[0x30]-1)` → first CPLD's drives on **I2C1**.
 - Slots `bmc_report[0x30] ..` → second CPLD's drives on **UI2C0** (only when a second CPLD is detected, i.e. `g_u32clpd_lost == 0`; otherwise the command fails).
 
-Within each bank, `localSlot / 8` selects the PCA9848/TCA9548 mux and `localSlot % 8` the channel. `SelectNvmeSlotChannel()` performs this split and selects the bus for the following MCTP exchange.
+Within each bank, `localSlot / 8` selects the PCA9848/TCA9548 mux and `localSlot % 8` the channel. `SelectNvmeSlotChannel()` performs this split and selects the bus for the following MCTP exchange. Each bank has **3 muxes × 8 channels = up to 24 drives** (`s_au8_PCA9848_Addr[]` = 0xB2/0xB4/0xB6), so a single CPLD supports up to 24 drives.
 
 ## BMC Report Memory Map (1024 bytes)
 The `bmc_report` array (CPLD1, accessed via `0xc0`) and `bmc_report1` (CPLD2, accessed via `0xc4`) share the same layout.
@@ -132,25 +132,29 @@ The `bmc_report` array (CPLD1, accessed via `0xc0`) and `bmc_report1` (CPLD2, ac
 | `0x10` | 1 | `temp_high` | Temperature sensor high byte |
 | `0x11` | 1 | `temp_low` | Temperature sensor low byte |
 | `0x20` | 4 | `cpld_jtag_id` | Scanned JTAG ID of the CPLD (4 bytes) |
-| `0x30` | 1 | `hdd_amount` | Number of detected HDDs (max 8) |
-| `0x40` | 8 | `hdd_port_stat` | Port status for HDD slots 0–7 |
-| `0x50` | 8 | `hdd_status` | General status for HDD slots 0–7 |
-| `0x60` | 8 | `hdd_led` | LED status for HDD slots 0–7 |
+| `0x30` | 1 | `hdd_amount` | Number of detected HDDs (max 24 per CPLD) |
+| `0x40` | 8 | `hdd_port_stat` | Port status, **2 bits per slot** (`0b11` = NVMe present), 4 slots per byte → covers up to 24 slots |
+| `0x50` | 8 | `hdd_status` | General status for HDD slots 0–7 (1 byte per slot; layout limited to 8) |
+| `0x60` | 8 | `hdd_led` | LED status for HDD slots 0–7 (1 byte per slot; layout limited to 8) |
 | `0x70` | 64 | `fan_data` | Data for 16 fans × 4 bytes each: `[Duty, RPM_H, RPM_L, Reserved]` |
-| `0x100` | 256 | `nvme_info` | NVMe info for up to 8 slots (32 bytes per slot) |
+| `0x100` | 768 | `nvme_info` | NVMe info for up to 24 slots (32 bytes per slot, `nvme_slot_0..23`) |
 
 ### Fan Data Detail (offset `0x70`)
 Each fan occupies 4 bytes. RPM is computed as: $\text{RPM} = \frac{1350000}{\text{count}_{13\text{-bit}}}$, where the 13-bit counter is reconstructed from `RPM_H` and `RPM_L` bytes read from the NCT7363Y.
 
 ### NCT7363Y Fan Controller Map
-Two NCT7363Y ICs on I2C0 manage 16 logical fan channels (4 PWM outputs × 8 TACH inputs per IC).
+Four NCT7363Y ICs (addresses `0x40`, `0x42`, `0x44`, `0x46`) manage up to 32 logical fan channels (4 PWM outputs × 8 TACH inputs per IC). Each IC is independently detected at startup (`fan_address_0x4?_d`); the MCU mirrors their register maps and also presents them as I²C4 slaves so the BMC can read fan data. On the reference board, `0x40`/`0x42` sit on CBP20OB and `0x44`/`0x46` on CFB26.
 
 | Fans | IC I²C Addr | PWM Channels | TACH Channels |
 | :--- | :--- | :--- | :--- |
-| FAN 1–4 | `0x44` | PWM 0–3 | TACH 0–3 |
-| FAN 5–8 | `0x44` | PWM 0–3 (shared) | TACH 4–7 |
-| FAN 9–12 | `0x46` | PWM 0–3 | TACH 0–3 |
-| FAN 13–16 | `0x46` | PWM 0–3 (shared) | TACH 4–7 |
+| FAN 1–4 | `0x40` | PWM 0–3 | TACH 0–3 |
+| FAN 5–8 | `0x40` | PWM 0–3 (shared) | TACH 4–7 |
+| FAN 9–12 | `0x42` | PWM 0–3 | TACH 0–3 |
+| FAN 13–16 | `0x42` | PWM 0–3 (shared) | TACH 4–7 |
+| FAN 17–20 | `0x44` | PWM 0–3 | TACH 0–3 |
+| FAN 21–24 | `0x44` | PWM 0–3 (shared) | TACH 4–7 |
+| FAN 25–28 | `0x46` | PWM 0–3 | TACH 0–3 |
+| FAN 29–32 | `0x46` | PWM 0–3 (shared) | TACH 4–7 |
 
 ## License
 Copyright (C) 2021 Nuvoton Technology Corp. All rights reserved. Licensed under the Apache-2.0 license.
