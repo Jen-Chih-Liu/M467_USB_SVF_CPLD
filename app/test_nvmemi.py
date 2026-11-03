@@ -26,14 +26,28 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
 # --- 執行檔位置 ---------------------------------------------------------------
-# 預設抓同 repo 的 Debug 版 M460.exe；找不到時退回 PATH 中的 "M460.exe"。
+# 依序搜尋同 repo 的 Debug / Release 版、腳本目錄，最後搜尋 PATH。
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_DEFAULT_BIN = os.path.join(_THIS_DIR, "M460", "build", "Debug", "M460.exe")
-M460_BIN = _DEFAULT_BIN if os.path.exists(_DEFAULT_BIN) else "M460.exe"
+
+
+def find_m460_bin():
+    candidates = [
+        os.path.join(_THIS_DIR, "M460", "build", "Debug", "M460.exe"),
+        os.path.join(_THIS_DIR, "M460", "build", "Release", "M460.exe"),
+        os.path.join(_THIS_DIR, "M460.exe"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("M460.exe") or "M460.exe"
+
+
+M460_BIN = find_m460_bin()
 
 
 # --- 測試案例 -----------------------------------------------------------------
@@ -540,15 +554,20 @@ def main():
     if args.bin:
         M460_BIN = args.bin
 
+    if os.path.isfile(M460_BIN):
+        M460_BIN = os.path.abspath(M460_BIN)
+    else:
+        resolved_bin = shutil.which(M460_BIN)
+        if resolved_bin is None:
+            ap.error(f"找不到執行檔 {M460_BIN}；請先編譯 M460，或使用 --bin 指定執行檔路徑")
+        M460_BIN = resolved_bin
+
     only = set()
     if args.only:
         for tok in args.only.split(","):
             tok = tok.strip()
             if tok.isdigit():
                 only.add(int(tok))
-
-    if not os.path.exists(M460_BIN) and os.sep in M460_BIN:
-        print(f"警告: 找不到 {M460_BIN}，仍會嘗試執行（可能在 PATH 中）。\n")
 
     print("=" * 66)
     print(f"NVMe-MI 測試   BIN={M460_BIN}")

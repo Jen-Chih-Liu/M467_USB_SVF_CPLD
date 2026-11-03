@@ -9,8 +9,19 @@ if (POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+# Honor CMAKE_MSVC_RUNTIME_LIBRARY (needed to select /MT vs /MD).
+if (POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
+
 project ("M460")
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+
+# Statically link the MSVC runtime (/MT, /MTd) so the executable does not
+# depend on ucrtbased.dll / vcruntime*.dll on machines without Visual Studio.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 # Add source to this project's executable.
 add_executable (M460 "M460.c" "cJSON.h" "cJSON.c" "mcu_isp.c" "cpld_svf.c" "usb_cmd.c"  "config.h" "cpld_svf.c")
 

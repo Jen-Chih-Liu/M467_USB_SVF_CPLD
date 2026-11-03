@@ -189,6 +189,10 @@ void I2C1_Init(void)
 void UI2C0_Init(void)
 {
     /* Open USCI_I2C0 and set clock to 100k */
+    /* DIAGNOSTIC: lowered to 10k to test UI2C0 SDA rise-time / pull-up issue.
+     * If the bus scan now only ACKs real devices (0x59/0x5A) instead of every
+     * even address, the ghost ACKs were caused by slow SDA rise (weak/missing
+     * pull-up or bus capacitance), confirming a hardware pull-up problem. */
     UI2C_Open(UI2C0, 100000);
 
     /* Get UI2C0 Bus Clock */
@@ -688,6 +692,10 @@ int main(void)
     GPIO_SetSlewCtl(PA, BIT6, GPIO_SLEWCTL_FAST);
     GPIO_SetSlewCtl(PC, BIT1, GPIO_SLEWCTL_FAST);
     GPIO_SetSlewCtl(PC, BIT0, GPIO_SLEWCTL_FAST);
+		// GPIO_SetMode(PB, BIT13, GPIO_MODE_OUTPUT);
+		// PB13=0;
+		// PB13=1;
+		 
     PA->SMTEN |= GPIO_SMTEN_SMTEN7_Msk | GPIO_SMTEN_SMTEN6_Msk ;
     PC->SMTEN |= GPIO_SMTEN_SMTEN1_Msk | GPIO_SMTEN_SMTEN0_Msk ;
 
@@ -788,6 +796,53 @@ cpld1_init:
         I2C2_Init();
         UI2C0_Init();
         SYS_LockReg();
+#if 0
+        /* Diagnostic scan: log outside the driver to avoid changing its
+         * event timing. Stop on timeout so a pending STOP is not retried
+         * for every remaining address. Writes may change a slave's state. */
+        {
+            uint8_t u8ScanAddr;
+            uint8_t u8ScanResult;
+            uint32_t u32ScanStart, u32ScanCycles;
+            uint32_t u32ScanCtl, u32ScanStatus, u32ScanPins;
+            int32_t i32ScanError;
+            printf("[UI2C0 SCAN] start (even addr only)\r\n");
+            for (u8ScanAddr = 0x02; u8ScanAddr < 0x78; u8ScanAddr += 2)
+            {
+                CLK_SysTickDelay(500);
+                printf("[UI2C0 SCAN] BEGIN addr=0x%02X CTL=0x%08lX STS=0x%08lX\r\n",
+                       (unsigned int)u8ScanAddr,
+                       (unsigned long)UI2C0->PROTCTL,
+                       (unsigned long)UI2C0->PROTSTS);
+                u32ScanStart = DWT->CYCCNT;
+                u8ScanResult = UI2C_WriteByte(UI2C0, u8ScanAddr, 0x00);
+                u32ScanCycles = DWT->CYCCNT - u32ScanStart;
+                u32ScanCtl = UI2C0->PROTCTL;
+                u32ScanStatus = UI2C0->PROTSTS;
+                u32ScanPins = PB->PIN;
+                i32ScanError = g_UI2C_i32ErrCode;
+                printf("[UI2C0 SCAN] END addr=0x%02X ret=%u err=%ld CTL=0x%08lX STS=0x%08lX SDA=%u SCL=%u cycles=%lu\r\n",
+                       (unsigned int)u8ScanAddr, (unsigned int)u8ScanResult,
+                       (long)i32ScanError, (unsigned long)u32ScanCtl,
+                       (unsigned long)u32ScanStatus,
+                       (unsigned int)((u32ScanPins >> 13U) & 1U),
+                       (unsigned int)((u32ScanPins >> 12U) & 1U),
+                       (unsigned long)u32ScanCycles);
+                if (i32ScanError == UI2C_ERR_TIMEOUT)
+                {
+                    printf("[UI2C0 SCAN] aborted: timeout; capture CTL/STS and STOP waveform\r\n");
+                    break;
+                }
+                if (u8ScanResult == 0U)
+                {
+                    printf("[UI2C0 SCAN] ACK addr=0x%02X (8-bit 0x%02X)\r\n",
+                           (unsigned int)u8ScanAddr,
+                           (unsigned int)(u8ScanAddr << 1));
+                }
+            }
+            printf("[UI2C0 SCAN] done\r\n");
+        }
+				#endif
     }
 
     if (SelectMuxChannel(I2C1, s_au8_PCA9848_Addr[0], 1) == 1)
@@ -1172,8 +1227,8 @@ cpld1_init:
             if (usb_rcvbuf[0] == 0xb0)
             {
                 response_buff[0] = 0x26;
-                response_buff[1] = 0x10;
-                response_buff[2] = 0x20;
+                response_buff[1] = 0x11;
+                response_buff[2] = 0x03;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
@@ -1636,24 +1691,69 @@ cpld1_init:
 
                 if (cmd_id == 1)
                 {
-                    /* Basic Management - data cached in bmc_report[]. */
-                    if (nvme_index < 24)
+                    /* Basic Management - data cached by the periodic poll:
+                     * bank0 (first CPLD, I2C1) in bmc_report[], bank1 (second
+                     * CPLD, UI2C0) in bmc_report1[]. The flat slot index counts
+                     * bank0's drives first, then bank1's, matching
+                     * SelectNvmeSlotChannel(): slots [0..bank0Count-1] are bank0
+                     * and [bank0Count..] are bank1 at local index
+                     * slot-bank0Count (populated by nvm_mi_read_1() which uses
+                     * the UI2C0 mux to read each second-CPLD drive). */
+                    uint8_t bank0_count = bmc_report[cpld_hdd_amount];
+                    uint8_t bank1_count = (g_u32clpd_lost == 0U) ?
+                                          bmc_report1[cpld_hdd_amount] : 0U;
+                    volatile uint8_t *src = NULL;
+                    uint8_t local_slot = 0U;
+                    uint16_t base = 0U;
+                    const uint32_t bank0_capacity =
+                        (sizeof(bmc_report) - NVME_MEM_OFFSET) / NVME_READ_COUNT;
+                    const uint32_t bank1_capacity =
+                        (sizeof(bmc_report1) - NVME_MEM_OFFSET) / NVME_READ_COUNT;
+
+                    /* Validate the bank split before selecting a cache. Never
+                     * interpret an unread/invalid bank0 count as zero: that
+                     * would incorrectly route bank0 slots to bank1. */
+                    if (bank0_count <= bank0_capacity)
                     {
-                        uint16_t base = (uint16_t)(NVME_MEM_OFFSET + (nvme_index * NVME_READ_COUNT));
+                        if (nvme_index < bank0_count)
+                        {
+                            src = bmc_report;
+                            local_slot = nvme_index;
+                        }
+                        else if ((g_u32clpd_lost == 0U) &&
+                                 (bank1_count <= bank1_capacity) &&
+                                 ((uint32_t)(nvme_index - bank0_count) < bank1_count))
+                        {
+                            src = bmc_report1;
+                            local_slot = (uint8_t)(nvme_index - bank0_count);
+                        }
+                    }
+
+                    if (src != NULL)
+                        base = (uint16_t)(NVME_MEM_OFFSET + (local_slot * NVME_READ_COUNT));
+
+                    if ((src != NULL) &&
+                        ((uint32_t)base + NVME_READ_COUNT <=
+                         ((src == bmc_report) ? sizeof(bmc_report) : sizeof(bmc_report1))))
+                    {
                         data_cnt = NVME_READ_COUNT;
 
                         for (i = 0; i < data_cnt; i++)
                         {
-                            response_buff[4 + i] = bmc_report[base + i];
+                            response_buff[4 + i] = src[base + i];
                         }
 
                         status = 0x00; /* Success */
                     }
                     else
                     {
-                        const char *reason = "NVMe index out of range (0..23)";
+                        char reason[96];
                         uint16_t k;
 
+                        sprintf(reason,
+                                "NVMe index %u unavailable (bank0=%u bank1=%u; invalid count or out of range)",
+                                (unsigned int)nvme_index, (unsigned int)bank0_count,
+                                (unsigned int)bank1_count);
                         for (k = 0; reason[k] != '\0' && k < 200; k++)
                         {
                             response_buff[4 + k] = (uint8_t)reason[k];

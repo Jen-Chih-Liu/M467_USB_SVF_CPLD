@@ -1,541 +1,180 @@
-# M460 HSUSBD SVF & BMC Firmware - Keil MDK Project
+# HSUSBD_HID_Transfer：Keil 建置與燒錄
 
-**Project Name:** HSUSBD_HID_Transfer  
-**MCU Target:** Nuvoton M467  
-**Core Clock:** 200 MHz  
-**Build Tool:** Keil MDK-ARM v5 (UV4)
+本文件只說明目前主專案；完整 USB／NVMe 協定與限制見 [fw/README.md](../../../../README.md)。
+設定依 [HSUSBD_HID_Transfer.uvprojx](HSUSBD_HID_Transfer.uvprojx)、原始碼及現存參數檔核對。
+歷史輸出存在不等於最新原始碼已建置成功；本次沒有執行 build、download 或 cleanup。
 
-## 📋 Project Overview
+## 1. 開啟正確專案
 
-This Keil MDK project implements a comprehensive Board Support Package (BSP) for the Nuvoton M460/M467 microcontroller featuring:
+1. 在 Windows 的 Keil µVision 使用 **Open Project** 開啟上述主專案。
+2. 選擇 target `HSUSBD_HID_Transfer`，進入 **Options for Target**。
+3. 核對 Device=`M467HJHAE`、Arm Compiler=`6.22`，不要切回 ARMCC 5。
+4. 安裝／核對可支援該 Device 的 Nuvoton Device Pack；BSP 程式碼取自本地 [Library](../../../../Library)。
+5. 核對本目錄 [FILESUM.exe](FILESUM.exe) 與 compiler 的 `fromelf` 可用。
+6. 初次或更換工具鏈時使用 **Rebuild**；一般增量更新使用 **Build**。
+7. 查看 **Build Output** 的 error、warning、link 與兩個 After Build 結果，不以進度列判定成功。
 
-- **USB Device (HSUSBD)** communication via HID class interface
-- **JTAG/SVF Player** for CPLD and FPGA programming over USB
-- **BMC (Baseboard Management Controller)** functionality:
-  - Multi-fan control and monitoring (NCT7363Y fan controllers)
-  - CPLD status and version monitoring
-  - Temperature sensor monitoring
-  - NVMe drive basic management interface (NVMe MI)
-- **Real-time debug output** via UART3
-- **System control** (reset, LED status, bootloader switching)
+專案相對 include／source 路徑依此目錄解析，不要把單一來源搬到其他目錄直接編譯。
+不提供容易混淆版本的快捷鍵，也不以手工列少量 object 取代正式專案。
 
-## 🎯 Key Characteristics
+## 2. 目前 compiler 與 linker
 
-| Property | Value |
-| :--- | :--- |
-| **Microcontroller** | Nuvoton M467 (ARM Cortex-M4) |
-| **Flash Memory** | 512 KB (APROM) + 8 KB (LDROM) |
-| **RAM** | 64 KB |
-| **USB Speed** | High-Speed USB 2.0 |
-| **Core Clock** | 200 MHz (PLL from 12 MHz HXT) |
-| **UART Debug** | 115200 bps on UART3 (PB14/PB15) |
-| **Compilation Time** | ~10-15 seconds (clean build) |
-| **Output Formats** | .hex, .elf, .bin (auto-generated) |
+| 項目 | 核對結果 |
+| --- | --- |
+| Device／CPU | `M467HJHAE`；Cortex-M4、single-precision FPU |
+| Compiler | `pCCUsed=6220000::V6.22::ARMCLANG`、`uAC6=1` |
+| C 設定 | XML `Optim=1`；現存參數為 `-std=c99 -O0`，不是 `-O2` |
+| CPU flags | `--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard` |
+| 其他 flags | `-ffunction-sections`、short enum／wchar、`__MICROLIB`；LTO 未啟用 |
+| Output | `OutputDirectory=.\obj\`、`OutputName=HSUSBD_HID_Transfer` |
+| HEX | `CreateHexFile=0`；目前不自動產生 Intel HEX |
+| Linker | RO base=`0x00000000`、RW base=`0x20000000`，entry=`Reset_Handler` |
+| Layout | `umfTarg=0`、`useFile=0`、`ScatterFile` 空白，非自訂 scatter |
 
-## 🛠 Prerequisites
+Linker 另含 `--map --first='startup_m460.o(RESET)' --datacompressor=off --info=inline --entry Reset_Handler`。
+現存 [linker response](obj/HSUSBD_HID_Transfer.lnp) 可供核對實際 invocation，並非新的建置證明。
+不要把某一次的編譯耗時、code size 或 RAM 使用量寫成固定保證。
 
-### Required Software
-- **Keil MDK-ARM v5** (v5.30 or later)
-- **Nuvoton NuMicro Device Pack** for M460 series
-  - [Download](https://www.nuvoton.com/tools-and-support/iot-iot-platform-tools/nuvoton-isp-programming-tool/)
-  - Install via Keil `Pack Installer` (within Keil IDE)
+### Device 描述與實際配置分開看
 
-### Optional but Recommended
-- **Serial Terminal** (PuTTY, TeraTerm) for debug console
-- **USB Device Driver** for M467 (auto-installed by Windows in most cases)
-- **FILESUM utility** (included in `Keil/` folder for binary verification)
+| 區域 | XML 描述範圍 | 大小／用途 |
+| --- | --- | --- |
+| IROM／APROM | `0x00000000..0x0007FFFF` | 512 KiB Device 描述 |
+| IRAM | `0x20000000..0x2001FFFF` | **128 KiB**，不是 64 KiB |
 
-### System Requirements
-- **Windows 7 or later** (or Windows Subsystem for Linux)
-- **USB 2.0 port** (high-speed recommended)
-- **Minimum 2 GB RAM** for IDE operation
+目前 linker 以 RO／RW base 配置，既有 response 未列出上述區域的最大長度。
+因此需檢查新建置 map 的 RO／RW／ZI、stack／heap；XML 容量不等於已強制檢查的上限。
+專案沒有在同一 target 再連結一份 LDROM bootloader。
+XML `CLOCK(84000000)` 只是描述；[main.c](../main.c) 的 `SYS_Init()` 實際設定核心 200 MHz。
 
-## 📂 Project Structure
+## 3. 實際納入的來源
 
-```
-HSUSBD_svf/Keil/
-├── HSUSBD_HID_Transfer.uvprojx    # Main Keil project file (XML format)
-├── HSUSBD_HID_Transfer.uvoptx     # User options (compiler, debugger, settings)
-├── HSUSBD_HID_Transfer.uvguix.*   # GUI workspace (user-specific)
-├── Nu_Link_Driver.ini             # Nu-Link debugger configuration
-├── EventRecorderStub.scvd         # Cortex-M event recording (optional)
-├── FILESUM.exe                    # Binary checksum verification utility
-├── obj/                           # Build output directory
-│   ├── *.o (object files)
-│   ├── *.lst (assembly listings)
-│   └── HSUSBD_HID_Transfer.elf
-├── lst/                           # Assembly output listings
-└── [Source files: main.c, cpld_fan.c, svf.c, etc. in parent directory]
-```
+- [main.c](../main.c)：應用入口、初始化與 USB command dispatcher。
+- [g_def.h](../g_def.h)：位址／偏移，屬 include 定義。
+- [descriptors.c](../descriptors.c)、[hid_transfer.c](../hid_transfer.c)、[hid_transfer.h](../hid_transfer.h)：HID。
+- [cpld_fan.c](../cpld_fan.c)：CPLD、風扇鏡像、溫度與 EEPROM。
+- [nvme_mi.c](../nvme_mi.c)：快取輪詢、live MCTP／NVMe-MI 與 RX IRQ。
+- [usb_sn.c](../usb_sn.c)、[log_dump.c](../log_dump.c)：UID serial 與 UART log。
+- [xsvftool-m031.c](../xsvftool-m031.c)、[play.c](../play.c)、[svf.c](../svf.c)、[xsvf.c](../xsvf.c)、[tap.c](../tap.c) 等：JTAG player。
+- [startup_m460.s](../../../../Library/Device/Nuvoton/m460/Source/ARM/startup_m460.s) 與本地 CMSIS／StdDriver：啟動及周邊。
 
-## 🔧 Project Configuration
+[main_mctp_test.c](../main_mctp_test.c) 未列入主專案，不是另一個會一起連結的 `main()`。
+也不要因檔名含 esp／gpio 就假定該參考 JTAG backend 已被採用。
+startup 的 weak `USCI0_IRQHandler` 由 [nvme_mi.c](../nvme_mi.c) 的 strong 定義覆蓋。
+建置時若缺此來源，不能把落入 weak handler 誤判成 slave IRQ 正常工作。
 
-### Target Configuration
-- **Device:** M467LLIB (ARM Cortex-M4, 512 KB Flash)
-- **Optimization:** Level 2 (-O2)
-- **FPU:** Enabled (VFP Single Precision)
-- **Compiler:** Arm Compiler 5 (ARMCC)
+## 4. 產物與 After Build
 
-### Memory Layout
-| Region | Address | Size | Purpose |
-| :--- | :--- | :--- | :--- |
-| **APROM** | 0x00000000 | 512 KB | Application code, data |
-| **LDROM** | 0x00100000 | 8 KB | ISP bootloader |
-| **RAM** | 0x20000000 | 64 KB | Stack, heap, globals |
-| **Config0** | 0x00300000 | 4 B | Security/boot config |
+目前 output basename 與檔名如下；這是建置流程，不代表各檔案此刻均已存在：
 
-### Peripheral Configuration
-
-#### USB (HSUSBD)
-- **Port:** USB High-Speed Device
-- **Class:** Human Interface Device (HID)
-- **Endpoints:**
-  - EP0: Control (64 bytes)
-  - EP1 IN: Interrupt (64 bytes)
-  - EP2 OUT: Bulk (512 bytes)
-  - EP3 IN: Bulk (512 bytes)
-- **VID/PID:** 0x0416 / 0x502A (Nuvoton)
-
-#### I2C Interfaces
-
-**I2C0 (PA4=SCL, PA5=SDA)** — Main sensor & control bus
-- Frequency: 400 kHz (standard mode)
-- Devices:
-  - CPLD at 0x78 (7-bit address 0x3C)
-  - NCT7363Y fan controllers at 0x88, 0x8C (7-bit: 0x44, 0x46)
-  - Temperature sensor at 0x60 (7-bit: 0x30)
-  - EEPROM at 0x5C (7-bit: 0x2E)
-
-**I2C1** — I2C MUX for NVMe SMBus
-- TCA9548 / PCA9548 multiplexer for selectable NVMe channels
-
-**I2C2 (PA10=SDA, PA11=SCL)** — Secondary CPLD
-- Used when dual CPLD configuration detected
-- Frequency: 400 kHz
-
-**UI2C0 (USCI0 — PB13=DAT0, PB12=CLK)** — NVMe Management Interface
-- 3-wire protocol for NVMe Basic Management
-- High-speed serial communication
-
-#### UART
-- **UART3:** Debug console
-  - Pins: PB14 (RX), PB15 (TX)
-  - Baud rate: 115200 bps
-  - Data: 8 bits, 1 stop, no parity
-
-#### JTAG (for SVF Programming)
-- **PA7:** TCK (Test Clock)
-- **PA6:** TMS (Test Mode Select)
-- **PC1:** TDI (Test Data In)
-- **PC0:** TDO (Test Data Out)
-- **Slew Rate:** Fast (for CPLD/FPGA compatibility)
-- **Input Buffer:** Schmitt trigger
-
-#### GPIO
-- **PB3:** LED_AMBER (active low)
-- **PB2:** LED_GREEN (active low)
-- **PA9:** HWM_SEL (hardware management mode select)
-
-## 🚀 Building the Project
-
-### Method 1: Keil IDE (GUI)
-
-1. **Open project in Keil:**
-   ```
-   File → Open Project... → HSUSBD_HID_Transfer.uvprojx
-   ```
-
-2. **Configure target (if needed):**
-   - Right-click on target in Project window
-   - Select `Options for Target...`
-   - Verify Device: `M467LLIB`
-   - Check compiler/debugger settings
-
-3. **Build project:**
-   - **Compile single file:** Ctrl+F7
-   - **Build project:** Ctrl+F8 (incremental)
-   - **Rebuild all:** Ctrl+Shift+F8 (clean build)
-
-4. **Output location:**
-   ```
-   obj/HSUSBD_HID_Transfer.elf       # ELF executable (debug symbols)
-   obj/HSUSBD_HID_Transfer.hex       # Intel HEX format
-   obj/HSUSBD_HID_Transfer.bin       # Raw binary
-   ```
-
-5. **Verify build:**
-   - Check **Build Output** window (should end with "0 Error(s), N Warning(s)")
-   - Executable size typically ~80-150 KB
-
-### Method 2: Command-Line Build
-
-**Using batch script (from fw root directory):**
-
-```batch
-cd fw
-build_keil_projects.bat
+```text
+obj/HSUSBD_HID_Transfer.axf          ELF 格式執行／除錯映像
+obj/HSUSBD_HID_Transfer.bin          fromelf 轉出的 raw binary
+obj/HSUSBD_HID_Transfer_SUM.bin      FILESUM 封裝映像
+lst/HSUSBD_HID_Transfer.map          linker map（建置產物）
 ```
 
-**Using UV4 directly:**
+AXF 是 ELF 格式但副檔名為 AXF；不能杜撰另外自動生成的 ELF 檔名。
+HEX 需另行啟用輸出才會產生，不是目前預設產物。
+兩個 After Build user program 均啟用，專案中的實際命令為：
 
-```batch
-"C:\Keil_v5\UV4\UV4.exe" -b "fw\SampleCode\StdDriver\HSUSBD_svf\Keil\HSUSBD_HID_Transfer.uvprojx" -j0 -o build.log
+```text
+fromelf --bin ".\obj\@L.axf" --output ".\obj\@L.bin"
+.\FILESUM ".\obj\@L.bin" ".\obj\@L_SUM.bin"
 ```
 
-**Return codes:**
-- 0 = Success
-- 1 = Warnings
-- \>1 = Build errors
-
-### Method 3: Custom Build (No GUI)
-
-```batch
-REM Minimal build using armcc (if Keil installed)
-cd fw\SampleCode\StdDriver\HSUSBD_svf
-armcc --c99 -c main.c -o obj/main.o
-armlink obj/*.o -o obj/HSUSBD_HID_Transfer.elf
-fromelf obj/HSUSBD_HID_Transfer.elf --bin -o obj/HSUSBD_HID_Transfer.bin
-```
-
-## 📋 Build Output Files
-
-### Primary Artifacts
-
-| File | Format | Purpose | Size |
-| :--- | :--- | :--- | :--- |
-| `.elf` | ELF executable | Debug symbols, full info | ~180 KB |
-| `.hex` | Intel HEX | Programming into APROM | ~150 KB (text) |
-| `.bin` | Raw binary | Direct flash write, compact | ~80-100 KB |
-
-### Secondary Artifacts
-
-| File | Purpose |
-| :--- | :--- |
-| `.lst` | Assembly listing with source lines |
-| `.map` | Linker map file (symbol table, memory layout) |
-| `_build.log` | Detailed build output (warnings, errors) |
-
-### Using FILESUM for Verification
-
-```bash
-cd Keil
-FILESUM.exe obj/HSUSBD_HID_Transfer.bin
-```
-
-Output:
-```
-SHA256: 1a2b3c4d5e6f7g8h...
-MD5: 9i8j7k6l5m4n3o2p...
-```
-
-## 🐛 Debugging in Keil
-
-### 1. Setting Up Debugger
-
-**Using Nu-Link Debugger:**
-1. Connect Nu-Link USB debugger to M467 board
-2. Project → Options for Target → **Debugger** tab
-3. Select: `Nu-Link Debugger`
-4. Click `Settings` → Verify connection
-
-**Alternative: J-Link Debugger**
-1. Select: `J-Link / J-Trace Cortex`
-2. Configure device ID and interface (SWD recommended)
-
-### 2. Debug Breakpoints
-
-```c
-// In main.c, set breakpoint at critical sections:
-int main(void) {
-    SYS_Init();           // ← Breakpoint to verify clock setup
-    USBD_Open(...);       // ← Check USB initialization
-    while (1) {
-        // ← Breakpoint in main loop
-    }
-}
-```
-
-**Keil keyboard shortcuts:**
-- **F5:** Start debug session
-- **Ctrl+F5:** Stop debug session
-- **F10:** Step over
-- **F11:** Step into
-- **Ctrl+F11:** Step out
-- **F9:** Toggle breakpoint
-
-### 3. Watch Window
-
-Monitor variables in real-time:
-1. **Debug → Watch Windows → Watch 1**
-2. Add expressions:
-   ```
-   usb_rcvbuf[0]         (USB receive buffer first byte)
-   buffer_index          (Current USB packet position)
-   timer0_count          (System timer for monitoring)
-   i2c_read_report[0]    (I2C sensor reading)
-   ```
-
-### 4. Serial Debug Output
-
-Since UART3 is configured for 115200 bps debug output:
-
-**PuTTY/TeraTerm setup:**
-- Port: COM (identified in Device Manager)
-- Speed: 115200 bps
-- Data bits: 8, Stop bits: 1, Parity: None
-- Open terminal window to see real-time debug messages
-
-**Sample debug output:**
-```
-[SYS] Core Clock: 200000000 Hz
-[USB] HSUSBD Initialized
-[I2C0] CPLD detected at 0x3C
-[I2C0] Temperature: 28.5°C
-[FAN] NCT7363Y at 0x44 configured
-[NVMe] MI channel 0 ready
-```
-
-## 🔗 Linker Script Configuration
-
-**Linker Script:** Automatically configured via device pack
-
-**Key sections:**
-```
-Region      Base Address     Size         Purpose
-IROM1       0x00000000       512 KB       APROM (application)
-IRAM1       0x20000000       64 KB        RAM (stack, heap)
-IROM2       0x00100000       8 KB         LDROM (bootloader)
-```
-
-**Adjusting memory usage:**
-1. Project → Options for Target → **Linker** tab
-2. Modify `--ro-base`, `--rw-base`, `--first` to relocate sections
-3. Recommended: Use defaults unless specific memory requirements
-
-## 🔐 Security & Config
-
-### Config Bytes (Non-Volatile)
-
-Located at address 0x00300000, controls:
-
-| Byte | Setting | Default | Purpose |
-| :--- | :--- | :--- | :--- |
-| 0 | User config0 | 0xFF | Boot from APROM, flash access enabled |
-| 1 | User config1 | 0xFF | ISP enable, watchdog disable |
-| 2 | User config2 | 0xFF | Reserved |
-| 3 | User config3 | 0xFF | Reserved |
-
-**Warning:** Incorrect config can make device unbrick-able. Only modify if you understand the consequences.
-
-### ISP Bootloader (LDROM)
-
-- **Base:** 0x00100000
-- **Size:** 8 KB
-- **Purpose:** In-System Programming via ISP protocol
-- **Activation:** Set LDROM boot bit in config bytes or GPIO trigger
-
-For ISP updates via M460.exe app tool, ensure bootloader is present and boot config is set to LDROM.
-
-## 🔄 Project Workflow
-
-### Clean Build (Remove All Intermediates)
-
-```batch
-rem Windows: Clean from Keil GUI
-Project → Rebuild All (Ctrl+Shift+F8)
-
-rem Or manually delete:
-rmdir /s /q obj lst
-```
-
-### Incremental Build (Faster)
-
-```batch
-rem Only recompile changed files
-Project → Build (Ctrl+F8)
-```
-
-### Binary Output Only (Skip Debug Info)
-
-```batch
-rem Convert to compact binary
-fromelf obj/HSUSBD_HID_Transfer.elf --bin -o HSUSBD_HID_Transfer.bin
-```
-
-### Verify Build Success
-
-- **No errors**: "0 Error(s), N Warning(s)"
-- **Output present**: `obj/HSUSBD_HID_Transfer.elf` exists and is >100 KB
-- **Buildlog clean**: No "undefined reference" messages
-
-## 📤 Flashing Firmware
-
-### Option 1: Using M460.exe CLI Tool
-
-After building, copy `.bin` output to app folder and program MCU:
-
-```batch
-cd ..\..\..\..\..\app
-M460.exe 0 UPDATE MCU ..\fw\SampleCode\StdDriver\HSUSBD_svf\obj\HSUSBD_HID_Transfer.bin
-```
-
-### Option 2: Keil Download
-
-In Keil IDE:
-1. Project → Options for Target → **Utilities** tab
-2. Enable: `Use External Tool for File Download`
-3. Configure **Nuvoton Programmer** if available
-4. Debug → Download (Ctrl+F10)
-
-### Option 3: Nu-Link Debugger
-
-Connected via USB, Keil automatically downloads during debug session start.
-
-### Verification
-
-After flashing:
-```batch
-M460.exe 0 MCU Version
-M460.exe 0 dumpall
-```
-
-Verify output shows updated firmware version.
-
-## ⚠️ Common Issues & Solutions
-
-### Issue 1: "Device Not Found"
-
-**Problem:** Keil can't connect to M467 debugger
-
-**Solutions:**
-1. Verify USB cable connection to Nu-Link
-2. Check Device Manager for "M467" device (should appear)
-3. Update Nu-Link driver:
-   - Delete `Nu_Link_Driver.ini`
-   - Restart Keil (will auto-reinstall driver)
-4. Try different USB port (USB 3.0 sometimes has issues)
-5. Install latest Keil MDK update
-
-### Issue 2: "Compile Error: undefined reference to SYS_Init"
-
-**Problem:** Missing library files
-
-**Solutions:**
-1. Verify Device Pack installed:
-   - Tools → Package Manager → Check M460 pack listed
-2. Project → Options → Device tab → verify `M467LLIB` selected
-3. Check Include Paths:
-   - Verify `Library/CMSIS/Include/` and `Library/StdDriver/inc/` present
-4. Rebuild all: Ctrl+Shift+F8
-
-### Issue 3: USB HID Not Recognized on Windows
-
-**Problem:** Device not appearing in Device Manager
-
-**Solutions:**
-1. First-time setup: Windows auto-install drivers (can take 30 seconds)
-2. If fails, manually install:
-   - Extract `libusb-win32` drivers
-   - Device Manager → right-click unknown device → Update driver → Browse → Select driver
-3. Check VID/PID matches (0x0416/0x502A)
-4. Try different USB port
-
-### Issue 4: Intermittent I2C Bus Hangs
-
-**Problem:** I2C0 sometimes locks up, requiring reset
-
-**Causes:** Slave device holds SDA low (bus stuck)
-
-**Solutions:**
-1. **Hardware:** Add 47Ω pull-up resistors to SDA/SCL if not present
-2. **Software:** Implement I2C bus recovery:
-   - Toggle SCL 9 times while monitoring SDA
-   - Generate STOP condition when SDA goes high
-3. **CPLD:** Verify CPLD I2C firmware is correct version
-
-### Issue 5: Build Takes >30 Seconds
-
-**Problem:** Slow compilation
-
-**Solutions:**
-1. Use **incremental build** (Ctrl+F8) instead of rebuild
-2. Check Optimization level: use `-O2` (not `-O3` for compile speed)
-3. Disable **Event Recorder** if not needed:
-   - Project → Options → Code Generation → uncheck "Enable Event Recording"
-4. Use RAM disk for `obj/` folder (if SSD is slow)
-
-### Issue 6: "Flash size exceeds 512 KB"
-
-**Problem:** Binary too large for M467
-
-**Solutions:**
-1. Check code size: Review linker `.map` file
-2. Disable unused features in `main.c`
-3. Use `-O2` or `-O3` optimization to reduce code size
-4. Check for duplicate object files in project
-
-## 📚 Key Source Files Reference
-
-| File | Purpose | Key Functions |
-| :--- | :--- | :--- |
-| **main.c** | Entry point, command dispatch | `main()`, USB command handler |
-| **cpld_fan.c** | CPLD & fan control logic | `read_cpld()`, `set_fan_duty()` |
-| **svf.c / xsvf.c** | SVF/JTAG player | `xsvftool_esp_svf_packet()` |
-| **nvme_mi.c** | NVMe management interface | `nvme_mi_read()`, `nvme_mi_write()` |
-| **hid_transfer.c** | USB HID packet handling | `USBD_HID_DataReceived()` |
-| **descriptors.c** | USB device descriptors | USB HID report descriptor |
-| **g_def.h** | Global definitions | I2C addresses, register maps |
-
-## 🔗 References
-
-### Nuvoton Documentation
-- M460 Series Datasheet
-- M460 BSP User Manual
-- M460 Standard Driver Documentation (included in device pack)
-
-### External Standards
-- USB HID specification (www.usb.org)
-- JTAG/SVF Standards (IEEE 1149.1)
-- I2C Specification (NXP)
-
-### Keil MDK Resources
-- Keil Online Documentation: www.keil.com/support/
-- ARM CMSIS Documentation
-- Cortex-M4 Programming Guide
-
-## ✅ Build Checklist
-
-Before distributing firmware:
-
-- [ ] **Compilation**: Build succeeds with 0 errors
-- [ ] **Warnings**: All warnings reviewed (error-level ones fixed)
-- [ ] **Binary size**: Reasonable (<200 KB for this application)
-- [ ] **Debug test**: Debugger connection works
-- [ ] **Flash verification**: Firmware flashes without errors
-- [ ] **Functional test**: Device responds to `M460.exe 0 MCU Version`
-- [ ] **UART debug**: Debug messages output correctly on serial terminal
-- [ ] **Performance**: No obvious delays or hangs in main loop
-
-## 📝 Version History
-
-| Date | Version | Changes |
-| :--- | :--- | :--- |
-| 2026-06-03 | 3.00 | M467 MCU, dual CPLD support, NVMe MI interface |
-| 2025-11-15 | 2.50 | Enhanced JTAG/SVF, fan duty cycle control |
-| 2024-06-10 | 2.00 | Multi-device support, I2C1 mux for NVMe |
-
-## 📞 Support & Troubleshooting
-
-For issues or questions:
-
-1. **Check Keil documentation**: www.keil.com/support
-2. **Review debug output**: Connect UART3 to serial terminal
-3. **Inspect `.map` file**: Understand memory usage and undefined symbols
-4. **Use debugger**: Set breakpoints and inspect variables
-5. **Check device power**: Verify MCU has stable power supply
-
----
-
-**Last Updated:** June 3, 2026  
-**Project:** M460 HSUSBD SVF & BMC Firmware  
-**Maintainer:** Nuvoton Technology
+`@L` 依 µVision output name 展開；先轉 binary，再用兩個檔案參數封裝。
+錯誤時檢查 working directory、工具路徑、輸入存在與新輸出時間，不能只看 callback exit code。
+日期版 SUM 檔不是這兩個 callback 的自動輸出，勿混入待發布的舊映像。
+
+### FILESUM 的精確格式
+
+實作在 [FILESUM.cpp](../../../../../app/FILESUM/FILESUM/FILESUM.cpp)，不是 checksum 查詢命令。
+需要 argc=3：程式名稱、raw 輸入檔、SUM 輸出檔。
+`APROM_SIZE=256*1024`，填充 byte 為 `0xFF`，SUM 固定 262144 bytes。
+raw 的實際長度／AXF 大小仍由此次 build 決定，不提供猜測的固定 code size。
+
+| SUM offset | 內容 |
+| --- | --- |
+| `0..payload end` | 原始 raw bytes，未使用部分填 `FF` |
+| `0x3FFF8..0x3FFFB` | 原始 byte 長度，little-endian 32-bit |
+| `0x3FFFC..0x3FFFF` | 原始 bytes 加總 `& 0xFFFF`，以 LE32 存放 |
+
+校驗值不是密碼學雜湊，高 16 bits 為零；不要用舊文件的雜湊範例驗證 FILESUM。
+payload 必須留出尾端 8 bytes；工具沒有可靠的超長輸入防護，亦可能在錯誤時回傳 0。
+因此交付前獨立核對 raw 長度、SUM 長度、padding、LE 長度與 checksum，保留 log。
+
+### APROM 與 ISP 不可混淆
+
+Device APROM 描述為 512 KiB，但 FILESUM 目前封裝只採 256 KiB。
+[ISP main.c](../../../ISP/ISP_HID_20/main.c) 使用相同 256 KiB 契約與尾端長度／校驗值。
+[ISP_HID_20.uvprojx](../../../ISP/ISP_HID_20/Keil/ISP_HID_20.uvprojx) 是獨立 target，RO base=`0x0F100000`。
+主專案 RO base=0；更新 main application 不會自動重新建置／安裝 ISP。
+先核對 bootloader、映像種類與容量；AXF、raw BIN、SUM BIN 不應隨意替換。
+主機更新 target token 為 `UPDATE M463`，版本查詢為 `Version MCU`。
+
+## 5. Nu-Link 燒錄前檢查
+
+1. 連接正確供電的板與 Nu-Link，確認 SWD／reset、電壓及 target Device。
+2. 在 **Options for Target → Debug／Utilities** 核對 Nu-Link driver 與 Settings。
+3. 在燒錄設定核對當前 Flash algorithm、APROM／LDROM、範圍與 Erase／Program／Verify。
+4. 現存 [Nu_Link_Driver.ini](Nu_Link_Driver.ini) 的 `[M460]` 為 APROM、Bank=0、`M460_AP_256.FLM`。
+5. 該區段 Erase／Program／Verify／ResetAndRun 均為 1；不應誤稱目前已選 512 KiB algorithm。
+6. XML Utilities 使用 `Bin\Nu_Link.dll`；INI 也不等於已連線、已確認算法可覆蓋本映像。
+7. 特別核對 512 KiB Device 描述與 256 KiB algorithm／ISP 契約差異，再使用 **Download**。
+8. 燒錄後查看 verify 結果，重啟並核對 USB、版本與 UART；勿靠檔案名稱判定版本。
+
+下載會改寫 flash；不知道 bootloader／Config 狀態時，不要盲目 erase 全片。
+進入除錯可在 `main()`／`SYS_Init()` 設 breakpoint；不要長時間停在 ISR 觀察實際時序。
+UART3 使用 PB14 RX、PB15 TX，115200 8N1；這不是 USB CDC COM port。
+
+## 6. 上板快速核對
+
+| 項目 | 目前原始碼設定 |
+| --- | --- |
+| I2C0 | PB4 SDA／PB5 SCL，100 kHz |
+| I2C1 | PB0 SDA／PB1 SCL，100 kHz；bank0 NVMe |
+| I2C2 | PA10 SDA／PA11 SCL，100 kHz；條件式初始化 |
+| UI2C0 | PB13 SDA／PB12 SCL，**10 kHz 診斷設定**；兩線 I²C |
+| I2C4 | PF4 SDA／PF5 SCL，100 kHz slave 鏡像；PC14 控制啟閉 |
+| JTAG | PA7 TCK／PA6 TMS／PC0 TDI／PC1 TDO |
+| HWM／GPIO | selector 40=PC14；PA9 只是 `HWM_SEL` 巨集；selector 48=PB6 |
+| USB | VID/PID `0416/502A`；Interrupt `81 IN / 02 OUT`，沒有 Bulk／EP3 |
+| packet | EP0=64；HS 資料端點=1024，FS=64；FS 主機流程仍需實測 |
+| FW version | B0 回 `26 10 20 01`，不要與 app 版本或發布日期混用 |
+
+完整 7-bit／8-bit 位址表與 D 系列 selector 見 [fw 概覽](../../../../README.md)。
+直接 USB D0／D2／D4 `[2]` 帶 8-bit 位址，韌體 `>>1`；bus `0=I2C0`、`1=I2C2`。
+VPD Write E0 的 `[11]` 是 carried count、`[12..]` 是資料，最多 180 bytes；不在最後 USB byte。
+ID1 是快取，ID9 不支援；不能宣稱 2..19 全部均實作。
+ID1 每 bank 快取容量 24；global index 串接兩 bank，不是全域固定 24 槽。
+live mux 對 TCA 仍用 PCA 的長度 3 檢查，TCA 卻只有一個位址；local≥8 存在越界風險。
+
+## 7. 腳本與清理
+
+[build_keil_projects.bat](../../../../build_keil_projects.bat) 由目前目錄遞迴建置所有 uvprojx／uvproj，含 ISP。
+找 UV4 的兩個既定 Windows 路徑，執行 `-b`、`-j0`，log 為專案檔名加 `_build.log`。
+0 印 SUCCESS、1 印 WARNING、>1 印 FAILED；沒有彙總失敗 exit code，必須逐份看 log。
+[rename_firmware.py](../../../../rename_firmware.py) 搜尋第一個 `APROM_SUM.bin`／`LDROM.bin` 後複製到目前目錄。
+主專案 basename 不匹配這兩個來源名稱，不能宣稱 build 後已自動發布。
+命名是 `msi_gpu_cp_<yy_mm_dd>_00_00_07.bin`／`msi_gpu_ld_<yy_mm_dd>_00_00_01.bin`，日期取執行當天。
+
+**清理前備份：腳本沒有刪除前確認，起點都是目前目錄。**
+[fw_clean_all.bat](../../../../fw_clean_all.bat) 整刪 `obj / lst / Objects / Listings / RTE`，BIN 也不保留。
+[fw_keep_bin.bat](../../../../fw_keep_bin.bat) 整刪 `lst / Listings / RTE`；`obj / Objects` 只留該層 `.bin`。
+後者亦刪所有子目錄，包括內含的 BIN，以及 AXF／HEX／map 等非 BIN 檔案。
+
+## 8. 驗證範圍與安全限制
+
+相關主機 mock 測試：[USCI polling](../../../../tests/test_usci_i2c_polling.py)、[slot cache](../../../../tests/test_nvme_slot_cache.py)、[MCTP IRQ](../../../../tests/test_mctp_usci_irq.py)。
+它們驗證抽取的 production 分支／sequencer，不是 USB 實機或完整韌體建置測試。
+syntax／preprocessor 檢查不能證明 link 成功、RAM 足夠或 flash algorithm 正確。
+master polling 關 IRQ；成功 TX 且 STOP 完成後才啟用 slave `0x10` RX，結束再停用。
+ISR fault 優先；合法 ACK|STOP 先存最後 byte 再 publish；queue 16 槽可用 15、每槽 128 bytes。
+sticky `-10/-11/-12` 分別為 slave fault／overflow／TX failure；`-2` RX timeout 是軟體 loop 預算。
+pending STO 不取消、master arbitration lost 不送 STOP；listen 不應清掉新的 response flags。
+上板測 bank1 ISR 應用唯讀 live ID6，不用 cache ID1；核對 mux／槽數後才操作。
+UI2C0 降速只是 pull-up／rise-time 診斷假說；要用波形、電壓與負載驗證，不推定已證實硬體故障。
+Format ID19 需 Dword1=`0x464D5421`（FMT!）；Dword0 含 SES，NSID 固定全 namespaces。
+會破壞資料；timeout、cache ID1 或 SMART 成功均不能證明格式化／清除已完成，勿自動重送。
+本地 BSP、CMSIS 與 Lib(X)SVF 各有自己的來源標頭；保留各 copyright／授權，不宣告全案統一授權。

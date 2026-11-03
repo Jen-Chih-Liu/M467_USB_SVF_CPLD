@@ -159,6 +159,11 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
 
     for (i = 0; i < u8NumAddrs; i++)
     {
+        /* USCI-I2C bus-idle guard: the USCI controller can fail to generate a
+         * START if issued too soon after the previous transaction's STOP (mux
+         * write / previous address attempt). Mirror the delay used in
+         * SelectMuxChannel_1()/DisableMux_1() before every device access. */
+        CLK_SysTickDelay(500);
 #if 0
 
         // Send the register offset we want to read from.
@@ -197,10 +202,24 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
 
             // Manually set the register pointer with UI2C_WriteMultiBytes,
             // then read the two temperature bytes with UI2C_ReadMultiBytes.
-            UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
             {
+                uint32_t u32Wr = UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
+                CLK_SysTickDelay(500);
+							#if 0
+                printf("[NVME1 DEV] addr=0x%02X(TP3) wrAck=%u\r\n",
+                       (unsigned int)s_au8NvmeMiAddr[i], (unsigned int)u32Wr);
+							#endif
+            }
+
+            {
+                uint32_t u32Rd = UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2);
+							#if 0
+                printf("[NVME1 DEV] addr=0x%02X(TP3) rdLen=%u r0=0x%02X r1=0x%02X\r\n",
+                       (unsigned int)s_au8NvmeMiAddr[i], (unsigned int)u32Rd,
+                       (unsigned int)au8Reg[0], (unsigned int)au8Reg[1]);
+#endif
+                if (u32Rd == 2)
+                {
                 int16_t i16Raw = (int16_t)(((au8Reg[0] << 8) | au8Reg[1]) & 0x1FFF);
 
                 // Sign-extend the 13-bit value (bit12 is the sign bit).
@@ -216,6 +235,7 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
                 pu8DataBuf[0] = 6;        // Status length
                 pu8DataBuf[3] = (uint8_t)i8Temp;   // Composite temperature (signed, 1 C/LSB)
                 return 1; // Success
+                }
             }
         }
         else
@@ -228,10 +248,25 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
 
             // Test method: manually set the register pointer with UI2C_WriteMultiBytes,
             // then read the two temperature bytes with UI2C_ReadMultiBytes.
-            UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
-
-            if (UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2) == 2)
             {
+                uint32_t u32Wr = UI2C_WriteMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], &u8RegPtr, 1);
+                CLK_SysTickDelay(500);
+							#if 0
+                printf("[NVME1 DEV] addr=0x%02X(TP12) wrAck=%u\r\n",
+                       (unsigned int)s_au8NvmeMiAddr[i], (unsigned int)u32Wr);
+							#endif
+            }
+
+            {
+                uint32_t u32Rd = UI2C_ReadMultiBytes(i2c_bus, s_au8NvmeMiAddr[i], au8Reg, 2);
+							#if 0
+                printf("[NVME1 DEV] addr=0x%02X(TP12) rdLen=%u r0=0x%02X r1=0x%02X\r\n",
+                       (unsigned int)s_au8NvmeMiAddr[i], (unsigned int)u32Rd,
+                       (unsigned int)au8Reg[0], (unsigned int)au8Reg[1]);
+							#endif
+
+                if (u32Rd == 2)
+                {
                 uint8_t u8Temp = (uint8_t)((((au8Reg[0] << 8) | (au8Reg[1] & 0x7ff)) >> 4) & 0xff);
 
                 // Build a minimal Basic Management structure so downstream parsing
@@ -240,6 +275,7 @@ static uint8_t ReadNvmeDataFromChannel_1(UI2C_T *i2c_bus, uint8_t *pu8DataBuf, u
                 pu8DataBuf[0] = 6;        // Status length
                 pu8DataBuf[3] = u8Temp;   // Composite temperature
                 return 1; // Success
+                }
             }
 
 #if 0
@@ -300,6 +336,12 @@ uint8_t SelectMuxChannel(I2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 
 static uint8_t SelectMuxChannel_1(UI2C_T *i2c_bus, uint8_t u8MuxAddr, uint8_t u8Channel)
 {
+    /* Let the UI2C0 bus return to idle before issuing the START. The USCI-I2C
+     * controller fails to generate a START if it is issued too soon after the
+     * previous transaction's STOP, which makes back-to-back mux writes NACK.
+     * Keeping the delay here protects EVERY caller (periodic poll, MCTP mux
+     * routing, self-test) without touching each call site. */
+    CLK_SysTickDelay(500);
     if (UI2C_WriteByte(i2c_bus, u8MuxAddr, (0x01 << u8Channel)) != 0)
     {
         // Optional: Add error logging here if needed.
@@ -325,6 +367,8 @@ static void DisableMux(I2C_T *i2c_bus, uint8_t u8MuxAddr)
 
 static void DisableMux_1(UI2C_T *i2c_bus, uint8_t u8MuxAddr)
 {
+    /* Same UI2C0 bus-idle guard as SelectMuxChannel_1 (see note there). */
+    CLK_SysTickDelay(500);
     UI2C_WriteByte(i2c_bus, u8MuxAddr, 0x00);
 }
 
@@ -478,9 +522,21 @@ void nvm_mi_read_1(void)
         // register stores 2 bits per slot (0b11 = NVMe present); only read
         // those slots and skip everything else (empty / SATA / not present).
         {
-            uint8_t u8PortStatus = bmc_report1[cpld_hdd_port_status + (u8SlotIndex / 4)];
+            uint8_t u8PortReg = (uint8_t)(cpld_hdd_port_status + (u8SlotIndex / 4));
+            uint8_t u8PortStatus = bmc_report1[u8PortReg];
             uint8_t u8SlotBits = (u8PortStatus >> ((u8SlotIndex % 4) * 2)) & 0x03;
-
+#if 0
+            /* Diagnostic: dump what CPLD2 actually reports for this slot so we
+             * can tell whether an all-0xFF read is because the port status is
+             * not "NVMe present" (0b11) rather than a bus failure. */
+            printf("[NVME1 PS] slot=%u hddAmt=%u reg=0x%02X raw=0x%02X bits=%u%s\r\n",
+                   (unsigned int)u8SlotIndex,
+                   (unsigned int)bmc_report1[cpld_hdd_amount],
+                   (unsigned int)u8PortReg,
+                   (unsigned int)u8PortStatus,
+                   (unsigned int)u8SlotBits,
+                   (u8SlotBits == 0x03) ? " -> NVMe (read)" : " -> skip");
+#endif
             if (u8SlotBits != 0x03)
             {
                 // Not an NVMe drive: mark data invalid and skip.
@@ -513,11 +569,26 @@ void nvm_mi_read_1(void)
             DisableMux_1(UI2C0, s_au8_PCA9848_Addr[1]);
             DisableMux_1(UI2C0, s_au8_PCA9848_Addr[2]);
             // Select the I2C channel for the current NVMe slot.
-            if (!SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux))
             {
-                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-                continue;
+                uint8_t u8MuxOk = SelectMuxChannel_1(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex], u8ChannelOnMux);
+                uint8_t u8MuxCtl;
+                CLK_SysTickDelay(500);
+                u8MuxCtl = UI2C_ReadByte(UI2C0, s_au8_PCA9848_Addr[u8MuxIndex]);
+							#if 0
+                printf("[NVME1 MUX] slot=%u mux=0x%02X ch=%u ok=%u ctlRead=0x%02X exp=0x%02X\r\n",
+                       (unsigned int)u8SlotIndex,
+                       (unsigned int)s_au8_PCA9848_Addr[u8MuxIndex],
+                       (unsigned int)u8ChannelOnMux,
+                       (unsigned int)u8MuxOk,
+                       (unsigned int)u8MuxCtl,
+                       (unsigned int)(1U << u8ChannelOnMux));
+							#endif
+                if (!u8MuxOk)
+                {
+                    // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                    memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                    continue;
+                }
             }
         }
         else
@@ -525,24 +596,44 @@ void nvm_mi_read_1(void)
             DisableMux_1(UI2C0, s_au8_TCA9548_Addr[0]);
 
             // Select the I2C channel for the current NVMe slot.
-            if (!SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux))
             {
-                // Mark data as invalid and skip to the next slot if MUX channel selection fails.
-                memset(pu8Dest, 0xFF, NVME_READ_COUNT);
-                continue;
+                uint8_t u8MuxOk = SelectMuxChannel_1(UI2C0, s_au8_TCA9548_Addr[u8MuxIndex], u8ChannelOnMux);
+							#if 0
+                printf("[NVME1 MUX] slot=%u mux=0x%02X ch=%u ok=%u\r\n",
+                       (unsigned int)u8SlotIndex,
+                       (unsigned int)s_au8_TCA9548_Addr[u8MuxIndex],
+                       (unsigned int)u8ChannelOnMux,
+                       (unsigned int)u8MuxOk);
+							#endif
+                if (!u8MuxOk)
+                {
+                    // Mark data as invalid and skip to the next slot if MUX channel selection fails.
+                    memset(pu8Dest, 0xFF, NVME_READ_COUNT);
+                    continue;
+                }
             }
         }
 
         // Attempt to read the NVMe-MI data from the selected channel.
-        if (ReadNvmeDataFromChannel_1(UI2C0, au8TempBuf, NVME_READ_COUNT))
         {
-            // If successful, copy the data to the correct location in the main report buffer.
-            memcpy(pu8Dest, au8TempBuf, NVME_READ_COUNT);
-        }
-        else
-        {
-            // Optional: If the read failed, clear the buffer area for this slot.
-            memset(pu8Dest, 0xFF, NVME_READ_COUNT); // Fill with 0xFF to indicate no data.
+            uint8_t u8ReadOk = ReadNvmeDataFromChannel_1(UI2C0, au8TempBuf, NVME_READ_COUNT);
+					#if 0
+            printf("[NVME1 RD ] slot=%u ok=%u d0=0x%02X d3=0x%02X\r\n",
+                   (unsigned int)u8SlotIndex,
+                   (unsigned int)u8ReadOk,
+                   (unsigned int)au8TempBuf[0],
+                   (unsigned int)au8TempBuf[3]);
+									 #endif
+            if (u8ReadOk)
+            {
+                // If successful, copy the data to the correct location in the main report buffer.
+                memcpy(pu8Dest, au8TempBuf, NVME_READ_COUNT);
+            }
+            else
+            {
+                // Optional: If the read failed, clear the buffer area for this slot.
+                memset(pu8Dest, 0xFF, NVME_READ_COUNT); // Fill with 0xFF to indicate no data.
+            }
         }
     }
 
@@ -575,15 +666,85 @@ void nvm_mi_read_1(void)
 #define MCTP_RXQ_DEPTH       16U            /* RX packet queue depth */
 #define MCTP_RXQ_PKT_SIZE    128U           /* Max bytes per queued RX packet */
 
-/* Slave RX scratch buffer + per-packet queue (filled by the I2C1 slave ISR). */
-static uint8_t          s_mctpRxData[512];
-static volatile uint8_t s_mctpRxLen  = 0;
-static volatile uint8_t s_mctpRxFlag = 0;
+/* Shared single-producer RX queue: 16 slots, 15 usable, no unread overwrite. */
+#define MCTP_ERR_SLAVE       (-10)
+#define MCTP_ERR_OVERFLOW    (-11)
+#define MCTP_ERR_TX          (-12)
+#define MCTP_UI2C_EVENTS     (UI2C_PROTSTS_STARIF_Msk | UI2C_PROTSTS_STORIF_Msk | \
+                             UI2C_PROTSTS_ACKIF_Msk | UI2C_PROTSTS_NACKIF_Msk | \
+                             UI2C_PROTSTS_ARBLOIF_Msk | UI2C_PROTSTS_ERRIF_Msk | \
+                             UI2C_PROTSTS_TOIF_Msk)
+#define MCTP_UI2C_INTS       (UI2C_PROTIEN_STARIEN_Msk | UI2C_PROTIEN_STORIEN_Msk | \
+                             UI2C_PROTIEN_ACKIEN_Msk | UI2C_PROTIEN_NACKIEN_Msk | \
+                             UI2C_PROTIEN_ARBLOIEN_Msk | UI2C_PROTIEN_ERRIEN_Msk | \
+                             UI2C_PROTIEN_TOIEN_Msk)
+static volatile int32_t s_mctpExchangeError = 0;
 static uint8_t          s_mctpRxqPkt[MCTP_RXQ_DEPTH][MCTP_RXQ_PKT_SIZE];
 static uint8_t          s_mctpRxqLen[MCTP_RXQ_DEPTH];
 static volatile uint8_t s_mctpRxqWr     = 0;
 static volatile uint8_t s_mctpRxqRd     = 0;
 static volatile uint8_t s_mctpRxqCurLen = 0;
+
+/* ISR, quiescent master polling, or short foreground critical section only. */
+static void mctp_set_error(int32_t error)
+{
+    if (s_mctpExchangeError == 0)
+        s_mctpExchangeError = error;
+    s_mctpRxqCurLen = 0U;
+}
+
+static void mctp_rxq_append(uint8_t data)
+{
+    uint8_t nextWr = (uint8_t)((s_mctpRxqWr + 1U) % MCTP_RXQ_DEPTH);
+
+    if (s_mctpExchangeError != 0)
+        return;
+    if ((nextWr == s_mctpRxqRd) || (s_mctpRxqCurLen >= MCTP_RXQ_PKT_SIZE))
+    {
+        mctp_set_error(MCTP_ERR_OVERFLOW);
+        return;
+    }
+    __DMB();                         /* acquire the consumer's released slot */
+    s_mctpRxqPkt[s_mctpRxqWr][s_mctpRxqCurLen++] = data;
+}
+
+static void mctp_rxq_publish(void)
+{
+    uint8_t nextWr = (uint8_t)((s_mctpRxqWr + 1U) % MCTP_RXQ_DEPTH);
+
+    if ((s_mctpExchangeError == 0) && (s_mctpRxqCurLen != 0U))
+    {
+        if ((nextWr == s_mctpRxqRd) || (s_mctpRxqCurLen > MCTP_RXQ_PKT_SIZE))
+            mctp_set_error(MCTP_ERR_OVERFLOW);
+        else
+        {
+            s_mctpRxqLen[s_mctpRxqWr] = s_mctpRxqCurLen;
+            __DMB();                 /* publish only complete packet contents */
+            s_mctpRxqWr = nextWr;
+        }
+    }
+    s_mctpRxqCurLen = 0U;
+}
+
+static void mctp_rxq_release(void)
+{
+    __DMB();                         /* finish copying before releasing slot */
+    s_mctpRxqRd = (uint8_t)((s_mctpRxqRd + 1U) % MCTP_RXQ_DEPTH);
+}
+
+static int32_t mctp_rxq_flush_error(void)
+{
+    uint32_t priMask = __get_PRIMASK();
+    int32_t error;
+
+    __disable_irq();
+    error = s_mctpExchangeError;
+    s_mctpRxqCurLen = 0U;
+    __DMB();
+    s_mctpRxqRd = s_mctpRxqWr;
+    __set_PRIMASK(priMask);
+    return error;
+}
 
 typedef void (*mctp_i2c_cb_t)(uint32_t u32Status);
 static mctp_i2c_cb_t s_mctpI2C1Handler = NULL;
@@ -616,7 +777,7 @@ static volatile uint8_t s_mctpUi2cData = 0;
  *   last  = last raw PROTSTS value, b0..b3 = first 4 received payload bytes
  *   rc    = mctp_rx_message() return (0 ok, -2 timeout, -4/-5 framing/PEC ...)
  * ----------------------------------------------------------------------- */
-#define NVME_UI2C0_DEBUG   1
+#define NVME_UI2C0_DEBUG   0
 
 #if NVME_UI2C0_DEBUG
 static volatile uint16_t s_dbgIrq   = 0;
@@ -632,12 +793,20 @@ static volatile uint8_t  s_dbgByte1  = 0;
 static volatile uint8_t  s_dbgByte2  = 0;
 static volatile uint8_t  s_dbgByte3  = 0;
 static volatile int32_t  s_dbgRc     = 0;
+/* TX side: total bytes the UI2C0 master actually clocked out for the whole
+ * request (sum over all MCTP packets) and the last UI2C error code.  txLen==0
+ * or txErr==-2 means the master never put the command on the bus (no ACK from
+ * the drive / bus stuck) -> the drive cannot possibly answer. */
+static volatile uint16_t s_dbgTxLen  = 0;
+static volatile uint16_t s_dbgTxExp  = 0;
+static volatile int32_t  s_dbgTxErr  = 0;
 
 static void nvme_ui2c0_dbg_reset(void)
 {
     s_dbgIrq  = 0; s_dbgStar = 0; s_dbgAddr = 0; s_dbgData = 0;
     s_dbgNack = 0; s_dbgStor = 0; s_dbgErr  = 0; s_dbgLast = 0;
     s_dbgByte0 = s_dbgByte1 = s_dbgByte2 = s_dbgByte3 = 0;
+    s_dbgTxLen = 0; s_dbgTxExp = 0; s_dbgTxErr = 0;
 }
 #endif
 
@@ -656,44 +825,35 @@ static void Mctp_I2C1_SlaveTRx(uint32_t u32Status)
 {
     uint8_t u8data;
 
-    if (u32Status == 0x60)                  /* Own SLA+W received; ACK returned */
+    if (s_mctpExchangeError != 0)
     {
-        s_mctpRxLen = 0;
+        s_mctpRxqCurLen = 0U;
+        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI);
+    }
+    else if (u32Status == 0x60)             /* Own SLA+W received; ACK returned */
+    {
         s_mctpRxqCurLen = 0U;
         I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
     }
-    else if ((u32Status == 0x80) || (u32Status == 0x88)) /* Data received; ACK returned */
+    else if (u32Status == 0x80)             /* Data received; ACK returned */
     {
         u8data = (uint8_t)I2C_GET_DATA(I2C1);
-
-        s_mctpRxData[s_mctpRxLen++] = u8data;
-        if (s_mctpRxqCurLen < MCTP_RXQ_PKT_SIZE)
-            s_mctpRxqPkt[s_mctpRxqWr][s_mctpRxqCurLen] = u8data;
-        if (s_mctpRxqCurLen < 0xFFU)
-            s_mctpRxqCurLen++;              /* > PKT_SIZE marks an oversize packet */
-
-        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+        mctp_rxq_append(u8data);
+        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI |
+                            ((s_mctpExchangeError == 0) ? I2C_CTL_AA : 0U));
     }
     else if (u32Status == 0xA0)             /* STOP/repeated START while addressed as slave */
     {
-        s_mctpRxFlag = 1;
-        s_mctpRxLen = 0;
-        {
-            uint8_t nextWr = (uint8_t)((s_mctpRxqWr + 1U) % MCTP_RXQ_DEPTH);
-            if ((s_mctpRxqCurLen > 0U) && (nextWr != s_mctpRxqRd))
-            {
-                s_mctpRxqLen[s_mctpRxqWr] = s_mctpRxqCurLen;
-                s_mctpRxqWr = nextWr;
-            }
-            s_mctpRxqCurLen = 0U;
-        }
-        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI | I2C_CTL_AA);
+        mctp_rxq_publish();
+        I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI |
+                            ((s_mctpExchangeError == 0) ? I2C_CTL_AA : 0U));
     }
     else                                    /* Bus error / arbitration lost */
     {
-        if ((u32Status == 0x68) || (u32Status == 0xB0))
+        mctp_set_error(MCTP_ERR_SLAVE);       /* Includes unexpected RX NACK (0x88). */
+        if ((u32Status == 0x68) || (u32Status == 0xB0) || (u32Status == 0x88))
         {
-            I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI_AA);
+            I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI);
         }
         else
         {
@@ -709,124 +869,130 @@ static void Mctp_I2C1_SlaveTRx(uint32_t u32Status)
  * progress on the UI2C0 (bank 1) bus. */
 void USCI0_IRQHandler(void)
 {
-    uint32_t u32Status = UI2C_GET_PROT_STATUS(UI2C0);
+    uint32_t u32Status;
+
+    /* Polling owns all events outside the slave lifecycle. Never clear them
+     * (or trigger the controller) from an unowned interrupt entry. */
+    if (s_mctpUI2C0Handler == NULL)
+        return;
+    u32Status = UI2C_GET_PROT_STATUS(UI2C0);
 
 #if NVME_UI2C0_DEBUG
     s_dbgIrq++;
     s_dbgLast = u32Status;
 #endif
 
-    if (s_mctpUI2C0Handler != NULL)
-        s_mctpUI2C0Handler(u32Status);
+    s_mctpUI2C0Handler(u32Status);
 }
 
 /* UI2C0 slave receive callback: USCI I2C uses protocol status flags instead of
  * the plain I2C state codes, so this mirrors Mctp_I2C1_SlaveTRx() using the
  * STAR/ACK/NACK/STOR interrupt flags. Incoming SMBus/MCTP bytes are queued the
  * same way (s_mctpRxq*) so the shared reassembly path is reused unchanged. The
- * first ACK after a START carries the matched slave address and is discarded;
- * subsequent ACKs are payload bytes (command code 0x0F, byte count, ...). */
+ * first selected write-address ACK is discarded (STAR is not required);
+ * phase-1 ACKs are payload bytes (command code 0x0F, byte count, ...). */
 static void Mctp_UI2C0_SlaveTRx(uint32_t u32Status)
 {
-    if ((u32Status & UI2C_PROTSTS_STARIF_Msk) == UI2C_PROTSTS_STARIF_Msk)
-    {
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, UI2C_PROTSTS_STARIF_Msk);
-#if NVME_UI2C0_DEBUG
-        s_dbgStar++;
-#endif
-        s_mctpRxLen = 0;
-        s_mctpRxqCurLen = 0U;
-        s_mctpUi2cData = 0U;                 /* next ACK = address byte */
-        UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
-    }
-    else if ((u32Status & UI2C_PROTSTS_ACKIF_Msk) == UI2C_PROTSTS_ACKIF_Msk)
-    {
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, UI2C_PROTSTS_ACKIF_Msk);
+    uint32_t events = u32Status & MCTP_UI2C_EVENTS;
+    uint32_t faults = events & (UI2C_PROTSTS_ARBLOIF_Msk |
+                               UI2C_PROTSTS_ERRIF_Msk | UI2C_PROTSTS_TOIF_Msk);
+    uint8_t resetSlave = 0U;
 
-        if (s_mctpUi2cData == 0U)
-        {
-            /* Address phase: consume the matched slave address, start a fresh
-             * packet, then switch to storing data bytes. */
-            (void)UI2C_GET_DATA(UI2C0);
-            s_mctpRxLen = 0;
-            s_mctpRxqCurLen = 0U;
-            s_mctpUi2cData = 1U;
+    if (events == 0U)
+        return;                            /* No protocol event: no control write. */
 #if NVME_UI2C0_DEBUG
-            s_dbgAddr++;
+    if (events & UI2C_PROTSTS_STARIF_Msk) s_dbgStar++;
+    if (events & UI2C_PROTSTS_STORIF_Msk) s_dbgStor++;
+    if (events & UI2C_PROTSTS_NACKIF_Msk) s_dbgNack++;
+    if (faults != 0U) s_dbgErr++;
 #endif
-        }
-        else
-        {
-            uint8_t u8data = (uint8_t)UI2C_GET_DATA(UI2C0);
 
-            s_mctpRxData[s_mctpRxLen++] = u8data;
-            if (s_mctpRxqCurLen < MCTP_RXQ_PKT_SIZE)
-                s_mctpRxqPkt[s_mctpRxqWr][s_mctpRxqCurLen] = u8data;
-            if (s_mctpRxqCurLen < 0xFFU)
-                s_mctpRxqCurLen++;          /* > PKT_SIZE marks an oversize packet */
-#if NVME_UI2C0_DEBUG
-            switch (s_dbgData)
-            {
-                case 0U: s_dbgByte0 = u8data; break;
-                case 1U: s_dbgByte1 = u8data; break;
-                case 2U: s_dbgByte2 = u8data; break;
-                case 3U: s_dbgByte3 = u8data; break;
-                default: break;
-            }
-            s_dbgData++;
-#endif
-        }
-
-        UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
-    }
-    else if ((u32Status & UI2C_PROTSTS_NACKIF_Msk) == UI2C_PROTSTS_NACKIF_Msk)
+    if (s_mctpExchangeError != 0)
     {
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, UI2C_PROTSTS_NACKIF_Msk);
-#if NVME_UI2C0_DEBUG
-        s_dbgNack++;
-#endif
+        s_mctpRxqCurLen = 0U;              /* Abort remains sticky until prepare. */
         s_mctpUi2cData = 0U;
-        UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
     }
-    else if ((u32Status & UI2C_PROTSTS_STORIF_Msk) == UI2C_PROTSTS_STORIF_Msk)
+    else if (faults != 0U)                 /* Hardware faults precede RXDAT. */
     {
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, UI2C_PROTSTS_STORIF_Msk);
-#if NVME_UI2C0_DEBUG
-        s_dbgStor++;
-#endif
-
-        s_mctpRxFlag = 1;
-        s_mctpRxLen = 0;
-        {
-            uint8_t nextWr = (uint8_t)((s_mctpRxqWr + 1U) % MCTP_RXQ_DEPTH);
-            if ((s_mctpRxqCurLen > 0U) && (nextWr != s_mctpRxqRd))
-            {
-                s_mctpRxqLen[s_mctpRxqWr] = s_mctpRxqCurLen;
-                s_mctpRxqWr = nextWr;
-            }
-            s_mctpRxqCurLen = 0U;
-        }
+        mctp_set_error(MCTP_ERR_SLAVE);
         s_mctpUi2cData = 0U;
-        UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
+        /* Documented slave "not addressed" reset, never STOP after ARBLO,
+         * including an ARBLO|ERR snapshot. No polling wait in this ISR. */
+        resetSlave = ((faults & UI2C_PROTSTS_ERRIF_Msk) != 0U) &&
+                     ((faults & UI2C_PROTSTS_ARBLOIF_Msk) == 0U);
     }
-    else if ((u32Status & (UI2C_PROTSTS_ARBLOIF_Msk | UI2C_PROTSTS_ERRIF_Msk |
-                           UI2C_PROTSTS_TOIF_Msk)) != 0U)
+    else if (((events & UI2C_PROTSTS_STARIF_Msk) &&
+              (events & (UI2C_PROTSTS_STORIF_Msk | UI2C_PROTSTS_ACKIF_Msk))) ||
+             ((events & UI2C_PROTSTS_ACKIF_Msk) &&
+              (events & UI2C_PROTSTS_NACKIF_Msk)) ||
+             (u32Status & UI2C_PROTSTS_SLAREAD_Msk))
     {
-        /* Bus error / arbitration lost / bus timeout: mirror the I2C1 handler's
-         * recovery (its 0x68/0xB0 and default branches). Clear the offending
-         * flags, drop any partial packet, and re-arm the slave with ACK so the
-         * USCI returns to listening instead of hanging the exchange until the
-         * host-side RX timeout. */
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, (UI2C_PROTSTS_ARBLOIF_Msk | UI2C_PROTSTS_ERRIF_Msk |
-                                       UI2C_PROTSTS_TOIF_Msk));
-#if NVME_UI2C0_DEBUG
-        s_dbgErr++;
-#endif
-        s_mctpRxLen     = 0;
-        s_mctpRxqCurLen = 0U;
-        s_mctpUi2cData  = 0U;
-        UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
+        /* Ambiguous phase snapshots and slave reads cannot be received safely. */
+        mctp_set_error(MCTP_ERR_SLAVE);
+        s_mctpUi2cData = 0U;
     }
+    else if (events & UI2C_PROTSTS_NACKIF_Msk)
+    {
+        mctp_set_error(MCTP_ERR_SLAVE);     /* Receive-only: NACK is unexpected. */
+        s_mctpUi2cData = 0U;
+    }
+    else
+    {
+        if (events & UI2C_PROTSTS_STARIF_Msk)
+        {
+            if (s_mctpRxqCurLen != 0U)
+                mctp_set_error(MCTP_ERR_SLAVE); /* Interrupted partial packet. */
+            s_mctpRxqCurLen = 0U;
+            s_mctpUi2cData = 0U;
+        }
+        if (events & UI2C_PROTSTS_ACKIF_Msk)
+        {
+            if (s_mctpUi2cData == 0U)
+            {
+                /* Address ACK also works without STAR. STOP clears SLASEL,
+                 * so qualify only this first address phase, not final data. */
+                if ((u32Status & UI2C_PROTSTS_SLASEL_Msk) == 0U)
+                    mctp_set_error(MCTP_ERR_SLAVE);
+                else
+                {
+                    (void)UI2C_GET_DATA(UI2C0);
+                    s_mctpRxqCurLen = 0U;
+                    s_mctpUi2cData = 1U;
+#if NVME_UI2C0_DEBUG
+                    s_dbgAddr++;
+#endif
+                }
+            }
+            else if (s_mctpUi2cData == 1U)
+            {
+                uint8_t data = (uint8_t)UI2C_GET_DATA(UI2C0);
+                mctp_rxq_append(data);
+#if NVME_UI2C0_DEBUG
+                switch (s_dbgData)
+                {
+                    case 0U: s_dbgByte0 = data; break;
+                    case 1U: s_dbgByte1 = data; break;
+                    case 2U: s_dbgByte2 = data; break;
+                    case 3U: s_dbgByte3 = data; break;
+                    default: break;
+                }
+                s_dbgData++;
+#endif
+            }
+        }
+        if (events & UI2C_PROTSTS_STORIF_Msk)
+        {
+            mctp_rxq_publish();            /* ACK|STOP: final byte precedes publish. */
+            s_mctpUi2cData = 0U;
+        }
+    }
+
+    /* One direct W1C for this snapshot, after coherent processing, before PTRG. */
+    UI2C0->PROTSTS = events;
+    if (resetSlave != 0U)
+        UI2C_SET_CONTROL_REG(UI2C0, UI2C_CTL_PTRG | UI2C_CTL_STO);
+    UI2C_SET_CONTROL_REG(UI2C0, UI2C_CTL_PTRG |
+                         ((s_mctpExchangeError == 0) ? UI2C_CTL_AA : 0U));
 }
 
 /* SMBus PEC (CRC-8): poly x^8 + x^2 + x + 1 (0x07), init 0. */
@@ -872,14 +1038,16 @@ static uint32_t mctp_calc_mic(uint8_t *data, size_t len)
 }
 
 /* Split one NVMe-MI message (NMH..MIC) into MCTP-over-SMBus packets and send. */
-static void mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
+static int32_t mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
 {
     uint8_t  pkt[8U + MCTP_TX_MTU + 1U];
     uint16_t off = 0U;
     uint8_t  seq = 0U;
 
-    if (pMsg == NULL)
-        return;
+    if (s_mctpExchangeError != 0)
+        return s_mctpExchangeError;
+    if ((pMsg == NULL) || (msgLen == 0U))
+        return -1;
 
     while (off < msgLen)
     {
@@ -887,6 +1055,8 @@ static void mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
         uint8_t  som  = (off == 0U) ? 1U : 0U;
         uint8_t  eom;
         uint16_t p;
+        uint32_t sent;
+        int32_t txError;
 
         if (frag > MCTP_TX_MTU)
             frag = MCTP_TX_MTU;
@@ -905,9 +1075,30 @@ static void mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
         pkt[8U + frag] = mctp_calc_pec(pkt, 8U + frag);
 
         if (s_mctpBus == 0U)
-            I2C_WriteMultiBytes(I2C1, pkt[0] >> 1, &pkt[1], 8U + frag);
+        {
+            sent = I2C_WriteMultiBytes(I2C1, pkt[0] >> 1, &pkt[1], 8U + frag);
+            txError = g_I2C_i32ErrCode;
+        }
         else
-            UI2C_WriteMultiBytes(UI2C0, pkt[0] >> 1, &pkt[1], 8U + frag);
+        {
+            /* Retain the existing 500 us spacing before each master packet. */
+            CLK_SysTickDelay(500);
+            sent = UI2C_WriteMultiBytes(UI2C0, pkt[0] >> 1, &pkt[1], 8U + frag);
+            txError = g_UI2C_i32ErrCode;
+#if NVME_UI2C0_DEBUG
+            s_dbgTxLen = (uint16_t)(s_dbgTxLen + sent);
+            s_dbgTxExp = (uint16_t)(s_dbgTxExp + (8U + frag));
+            s_dbgTxErr = txError;
+#endif
+        }
+
+        if ((sent != (8U + frag)) || (txError != 0) ||
+            ((s_mctpBus == 1U) && (UI2C0->PROTCTL & UI2C_PROTCTL_STO_Msk)) ||
+            ((s_mctpBus == 0U) && (I2C1->CTL0 & I2C_CTL0_STO_Msk)))
+        {
+            mctp_set_error(MCTP_ERR_TX);    /* No rearm, remaining fragments or retry. */
+            return s_mctpExchangeError;
+        }
 
         off = (uint16_t)(off + frag);
         seq = (uint8_t)((seq + 1U) & 0x03U);
@@ -915,30 +1106,15 @@ static void mctp_tx_message(uint8_t *pMsg, uint16_t msgLen)
             CLK_SysTickDelay(2000);
     }
 
-    /* Fix 1 (UI2C0 master->slave turnaround): the drive turns the bus around
-     * and starts sending its MCTP response very soon after this request's
-     * STOP. UI2C_WriteMultiBytes() leaves the USCI with CTL = PTRG only (AA
-     * de-asserted), so until the slave listener is armed the hardware would
-     * NACK the drive's address and the response would be lost -> mctp receive
-     * times out (-2). Clear the protocol-status residue left by the master
-     * transfer and assert AA here, the instant the request completes, so the
-     * USCI acknowledges address 0x10 as soon as the response's START arrives.
-     * USCI clock-stretches between bytes until PTRG is written, so the held
-     * transaction is serviced once USCI0_IRQHandler is enabled in
-     * mctp_bus_listen(); the sticky STARIF/ACKIF flags are not lost. Plain
-     * I2C1 (bank 0) does not need this because its slave re-entry is handled
-     * by the I2C controller itself. */
+    /* Polling owns the controller through STOP completion and its PTRG
+     * handshake. Arm slave ACK only afterwards; do not clear fresh response
+     * events or reset shared RX state here. Hardware must hold an early
+     * response until listen enables its interrupts (verify on silicon). */
     if (s_mctpBus == 1U)
     {
-        UI2C_CLR_PROT_INT_FLAG(UI2C0, (UI2C_PROTSTS_STARIF_Msk | UI2C_PROTSTS_STORIF_Msk |
-                                       UI2C_PROTSTS_NACKIF_Msk | UI2C_PROTSTS_ACKIF_Msk |
-                                       UI2C_PROTSTS_ARBLOIF_Msk | UI2C_PROTSTS_ERRIF_Msk |
-                                       UI2C_PROTSTS_TOIF_Msk));
-        s_mctpRxLen     = 0;
-        s_mctpRxqCurLen = 0U;
-        s_mctpUi2cData  = 0U;              /* next ACK = address byte */
         UI2C_SET_CONTROL_REG(UI2C0, (UI2C_CTL_PTRG | UI2C_CTL_AA));
     }
+    return 0;
 }
 
 /* Receive and reassemble one MCTP message, verifying PEC per packet and MIC. */
@@ -964,6 +1140,8 @@ static int32_t mctp_rx_message_core(uint8_t *pMsg, uint16_t maxLen, uint16_t *pM
         uint8_t seq;
         uint8_t payLen;
 
+        if (s_mctpExchangeError != 0)
+            return mctp_rxq_flush_error();
         if (s_mctpRxqRd == s_mctpRxqWr)
         {
             if (++waitCnt > MCTP_RX_TIMEOUT_CNT)
@@ -972,17 +1150,20 @@ static int32_t mctp_rx_message_core(uint8_t *pMsg, uint16_t maxLen, uint16_t *pM
         }
         waitCnt = 0U;
 
+        __DMB();                         /* acquire producer's published packet */
         rawLen = s_mctpRxqLen[s_mctpRxqRd];
         if (rawLen > MCTP_RXQ_PKT_SIZE)
         {
-            s_mctpRxqRd = (uint8_t)((s_mctpRxqRd + 1U) % MCTP_RXQ_DEPTH);
+            mctp_rxq_release();
             return -3;
         }
         /* pkt[0] = MCU write address (part of PEC), pkt[1..] = received bytes. */
         pkt[0] = (uint8_t)(MCU_ADDR_7BIT << 1);
         memcpy(&pkt[1], s_mctpRxqPkt[s_mctpRxqRd], rawLen);
-        s_mctpRxqRd = (uint8_t)((s_mctpRxqRd + 1U) % MCTP_RXQ_DEPTH);
+        mctp_rxq_release();
 
+        if (rawLen < 9U)                  /* command, count>=6, PEC before reads */
+            return -4;
         bc = pkt[2];
         if ((pkt[1] != 0x0FU) || (bc < 6U) || ((uint16_t)rawLen < ((uint16_t)bc + 3U)))
             return -4;
@@ -1036,6 +1217,8 @@ static int32_t mctp_rx_message_core(uint8_t *pMsg, uint16_t maxLen, uint16_t *pM
             return -9;
     }
 
+    if (s_mctpExchangeError != 0)
+        return mctp_rxq_flush_error();
     *pMsgLen = len;
     return 0;
 }
@@ -1046,19 +1229,22 @@ static int32_t mctp_rx_message(uint8_t *pMsg, uint16_t maxLen, uint16_t *pMsgLen
 {
     int32_t ret = mctp_rx_message_core(pMsg, maxLen, pMsgLen);
 
-#if NVME_UI2C0_DEBUG
-    s_dbgRc = ret;
-#endif
-
-    if (ret <= -3)
+    if (s_mctpExchangeError != 0)
+        ret = mctp_rxq_flush_error();
+    else if (ret <= -3)
     {
         uint32_t idleCnt = 0U;
 
         while (idleCnt <= MCTP_RX_TIMEOUT_CNT)
         {
+            if (s_mctpExchangeError != 0)
+            {
+                ret = mctp_rxq_flush_error();
+                break;
+            }
             if (s_mctpRxqRd != s_mctpRxqWr)
             {
-                s_mctpRxqRd = (uint8_t)((s_mctpRxqRd + 1U) % MCTP_RXQ_DEPTH);
+                mctp_rxq_release();
                 idleCnt = 0U;
             }
             else
@@ -1067,6 +1253,9 @@ static int32_t mctp_rx_message(uint8_t *pMsg, uint16_t maxLen, uint16_t *pMsgLen
             }
         }
     }
+#if NVME_UI2C0_DEBUG
+    s_dbgRc = ret;
+#endif
     return ret;
 }
 
@@ -1075,29 +1264,65 @@ static int32_t mctp_rx_message(uint8_t *pMsg, uint16_t maxLen, uint16_t *pMsgLen
  * transmitted. Call before mctp_tx_message(). */
 static void mctp_bus_prepare(void)
 {
-    s_mctpRxqRd = s_mctpRxqWr;
+    uint32_t priMask = __get_PRIMASK();
+
+    __disable_irq();
+    /* Quiesce before touching queue state, pending IRQ or callbacks. */
     if (s_mctpBus == 0U)
     {
-        I2C_SetSlaveAddr(I2C1, 0, MCU_ADDR_7BIT, I2C_GCMODE_DISABLE);
-        s_mctpI2C1Handler = Mctp_I2C1_SlaveTRx;
+        I2C_DisableInt(I2C1);
+        NVIC_DisableIRQ(I2C1_IRQn);
     }
     else
     {
-        UI2C_SetSlaveAddr(UI2C0, 0, MCU_ADDR_7BIT, UI2C_GCMODE_DISABLE);
-        s_mctpUi2cData = 0U;
+        UI2C_DISABLE_PROT_INT(UI2C0, MCTP_UI2C_INTS);
+        NVIC_DisableIRQ(USCI0_IRQn);
+    }
+    s_mctpExchangeError = 0;
+    s_mctpRxqCurLen = 0U;
+    s_mctpUi2cData = 0U;
+    __DMB();
+    s_mctpRxqRd = s_mctpRxqWr;
+    if (s_mctpBus == 0U)
+    {
+        NVIC_ClearPendingIRQ(I2C1_IRQn);
+        I2C_SetSlaveAddr(I2C1, 0, MCU_ADDR_7BIT, I2C_GCMODE_DISABLE);
+        s_mctpI2C1Handler = Mctp_I2C1_SlaveTRx;
+        if (I2C1->CTL0 & I2C_CTL0_STO_Msk)
+            mctp_set_error(MCTP_ERR_TX);
+    }
+    else
+    {
+        NVIC_ClearPendingIRQ(USCI0_IRQn);
         s_mctpUI2C0Handler = Mctp_UI2C0_SlaveTRx;
 #if NVME_UI2C0_DEBUG
         nvme_ui2c0_dbg_reset();
         s_dbgRc = 0;
 #endif
+        /* SetSlaveAddr writes PROTCTL; never cancel a pending master STOP. */
+        if (UI2C0->PROTCTL & UI2C_PROTCTL_STO_Msk)
+            mctp_set_error(MCTP_ERR_TX);
+        else
+            UI2C_SetSlaveAddr(UI2C0, 0, MCU_ADDR_7BIT, UI2C_GCMODE_DISABLE);
     }
+    __set_PRIMASK(priMask);                /* Master polling remains sole owner. */
 }
 
 /* Enable the slave interrupt on the current MCTP bus and arm ACK so the drive's
  * response is captured. Call after mctp_tx_message(), before mctp_rx_message(). */
 static void mctp_bus_listen(void)
 {
-    s_mctpRxFlag = 0;
+    uint32_t priMask = __get_PRIMASK();
+
+    __disable_irq();
+    if (((s_mctpBus == 1U) && (UI2C0->PROTCTL & UI2C_PROTCTL_STO_Msk)) ||
+        ((s_mctpBus == 0U) && (I2C1->CTL0 & I2C_CTL0_STO_Msk)))
+        mctp_set_error(MCTP_ERR_TX);
+    if (s_mctpExchangeError != 0)
+    {
+        __set_PRIMASK(priMask);
+        return;
+    }
     if (s_mctpBus == 0U)
     {
         I2C_EnableInt(I2C1);
@@ -1106,51 +1331,62 @@ static void mctp_bus_listen(void)
     }
     else
     {
-        /* Fix 2 (clean master->slave re-entry): the slave ACK is already armed
-         * by mctp_tx_message() right after the request's STOP, with the master
-         * transaction's protocol-status residue cleared. Here we only turn on
-         * the protocol interrupts so a response that arrives (or already began
-         * arriving and is being clock-stretched) during the turnaround is
-         * serviced. We deliberately do NOT re-clear the status flags or
-         * re-write the control register, so any sticky STARIF/ACKIF latched
-         * since AA was asserted is preserved and handled the moment the IRQ is
-         * enabled. */
-        UI2C_ENABLE_PROT_INT(UI2C0, (UI2C_PROTIEN_ACKIEN_Msk | UI2C_PROTIEN_NACKIEN_Msk |
-                                     UI2C_PROTIEN_STORIEN_Msk | UI2C_PROTIEN_STARIEN_Msk |
-                                     UI2C_PROTIEN_ARBLOIEN_Msk | UI2C_PROTIEN_ERRIEN_Msk |
-                                     UI2C_PROTIEN_TOIEN_Msk));
+        /* ACK is already armed after polling STOP/PTRG. Preserve all response
+         * events and partial state; only enable interrupt ownership here. */
+        UI2C_ENABLE_PROT_INT(UI2C0, MCTP_UI2C_INTS);
         NVIC_EnableIRQ(USCI0_IRQn);
     }
+    __set_PRIMASK(priMask);
 }
 
 /* Disable the slave interrupt on the current MCTP bus and detach the callback,
  * leaving the peripheral free for its normal master use (mux + polling). */
 static void mctp_bus_end(void)
 {
+    uint32_t priMask = __get_PRIMASK();
+
+    __disable_irq();
     if (s_mctpBus == 0U)
     {
         I2C_DisableInt(I2C1);
         NVIC_DisableIRQ(I2C1_IRQn);
+        if ((I2C1->CTL0 & I2C_CTL0_STO_Msk) == 0U)
+            I2C_SET_CONTROL_REG(I2C1, I2C_CTL_SI); /* Disable slave ACK. */
         s_mctpI2C1Handler = NULL;
+        NVIC_ClearPendingIRQ(I2C1_IRQn);
     }
     else
     {
-        UI2C_DISABLE_PROT_INT(UI2C0, (UI2C_PROTIEN_ACKIEN_Msk | UI2C_PROTIEN_NACKIEN_Msk |
-                                      UI2C_PROTIEN_STORIEN_Msk | UI2C_PROTIEN_STARIEN_Msk |
-                                      UI2C_PROTIEN_ARBLOIEN_Msk | UI2C_PROTIEN_ERRIEN_Msk |
-                                      UI2C_PROTIEN_TOIEN_Msk));
+        UI2C_DISABLE_PROT_INT(UI2C0, MCTP_UI2C_INTS);
         NVIC_DisableIRQ(USCI0_IRQn);
+        if ((UI2C0->PROTCTL & UI2C_PROTCTL_STO_Msk) == 0U)
+        {
+            uint32_t events = UI2C0->PROTSTS & MCTP_UI2C_EVENTS;
+            UI2C0->PROTSTS = events;
+            UI2C_SET_CONTROL_REG(UI2C0, UI2C_CTL_PTRG); /* Release with AA=0. */
+        }
         s_mctpUI2C0Handler = NULL;
+        NVIC_ClearPendingIRQ(USCI0_IRQn);
+    }
+    s_mctpRxqCurLen = 0U;
+    s_mctpUi2cData = 0U;
+    __DMB();
+    __set_PRIMASK(priMask);
 #if NVME_UI2C0_DEBUG
-        printf("[UI2C0] irq=%u star=%u addr=%u data=%u nack=%u stor=%u err=%u "
+    if (s_mctpBus == 1U)
+    {
+        if (s_mctpExchangeError != 0)
+            s_dbgRc = s_mctpExchangeError;
+        printf("[UI2C0] tx=%u/%u txErr=%d irq=%u star=%u addr=%u data=%u nack=%u stor=%u err=%u "
                "last=0x%04lX b=%02X %02X %02X %02X rc=%d\r\n",
+               (unsigned)s_dbgTxLen, (unsigned)s_dbgTxExp, (int)s_dbgTxErr,
                (unsigned)s_dbgIrq,  (unsigned)s_dbgStar, (unsigned)s_dbgAddr,
                (unsigned)s_dbgData, (unsigned)s_dbgNack, (unsigned)s_dbgStor,
                (unsigned)s_dbgErr,  (unsigned long)s_dbgLast,
                s_dbgByte0, s_dbgByte1, s_dbgByte2, s_dbgByte3,
                (int)s_dbgRc);
-#endif
     }
+#endif
 }
 
 /* Send a 16-byte NVMe-MI Command request (NMH + opcode + DWORD0 + DWORD1),
@@ -1172,9 +1408,12 @@ static int32_t nvme_mi_cmd_xfer(const uint8_t *pReq, uint8_t *pResp, uint16_t ma
     msg[19] = (uint8_t)((mic >> 24) & 0xFF);
 
     mctp_bus_prepare();
-    mctp_tx_message(msg, (uint16_t)sizeof(msg));
-    mctp_bus_listen();
-    ret = mctp_rx_message(pResp, maxLen, pRespLen);
+    ret = mctp_tx_message(msg, (uint16_t)sizeof(msg));
+    if (ret == 0)
+    {
+        mctp_bus_listen();
+        ret = mctp_rx_message(pResp, maxLen, pRespLen);
+    }
     mctp_bus_end();
     return ret;
 }
@@ -1215,12 +1454,12 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
          * CPLD is present (UI2C0 pins + UI2C0_Init done in main.c). */
         if (g_u32clpd_lost != 0U)
         {
-					#if 0
+#if NVME_UI2C0_DEBUG
             printf("[NVME DBG] slot=%u bank0Count=%u g_u32clpd_lost=%lu -> bank1 rejected\r\n",
                    (unsigned int)u8SlotIndex,
                    (unsigned int)u8Bank0Count,
                    (unsigned long)g_u32clpd_lost);
-					#endif
+#endif
             return 0;
         }
 
@@ -1230,7 +1469,7 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
 
     u8MuxIndex     = u8LocalSlot / u8ChannelsPerMux;
     u8ChannelOnMux = u8LocalSlot % u8ChannelsPerMux;
-#if 0
+#if NVME_UI2C0_DEBUG
     printf("[NVME DBG] slot=%u bank0Count=%u local=%u bus=%s mux=%u ch=%u lost=%lu\r\n",
            (unsigned int)u8SlotIndex,
            (unsigned int)u8Bank0Count,
@@ -1239,16 +1478,16 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
            (unsigned int)u8MuxIndex,
            (unsigned int)u8ChannelOnMux,
            (unsigned long)g_u32clpd_lost);
-		#endif
+#endif
 
     if (u8MuxIndex >= u8MuxCount)
     {
-			#if 0
+#if NVME_UI2C0_DEBUG
         printf("[NVME DBG] slot=%u mux out of range: mux=%u count=%u\r\n",
                (unsigned int)u8SlotIndex,
                (unsigned int)u8MuxIndex,
                (unsigned int)u8MuxCount);
-			#endif
+#endif
         return 0;
     }
 
@@ -1283,6 +1522,100 @@ static uint8_t SelectNvmeSlotChannel(uint8_t u8SlotIndex)
         }
     }
 }
+
+#if NVME_UI2C0_DEBUG
+/* UI2C0 (bank 1) master-side self-test.  Confirms, over UART3, that the mux
+ * actually routes - and does so WITHOUT needing any drive present, because
+ * writing and reading back a PCA9848/TCA9548 control register only involves the
+ * mux chip itself, not the downstream NVMe drive.
+ *
+ * It probes EVERY configured mux address so you can see which muxes physically
+ * respond.  For each mux it: disables all channels, waits for the bus to go
+ * idle, writes the target channel bitmap, waits again, then reads the control
+ * register back.  A short idle delay is inserted before every master START
+ * because the USCI-I2C controller can fail to generate a START if it is issued
+ * too soon after the previous transaction's STOP (the bus is still returning to
+ * idle) - which makes a second back-to-back transfer NACK even though the first
+ * succeeded.
+ *
+ * Reading each line  [UI2C0 MUX] mux=0x..  :
+ *   ack      = 1 the mux ACKed the channel write, 0 = NACK / no response
+ *   ctlExp   = channel bitmap written  (1 << channel)
+ *   ctlRead  = value read back from the mux control register
+ *              -> ctlRead == ctlExp  : this mux is present and switching OK
+ *              -> 0x00 / 0xFF         : this mux did not respond (absent / wrong
+ *                                       address / bus stuck)
+ *   tgt=1 marks the mux/channel that the requested slot actually maps to. */
+static void nvme_ui2c0_mux_selftest(uint8_t u8SlotIndex)
+{
+    const uint8_t u8ChannelsPerMux = 8U;
+    const uint8_t u8MuxCount = (uint8_t)(sizeof(s_au8_PCA9848_Addr) /
+                                         sizeof(s_au8_PCA9848_Addr[0]));
+    uint8_t u8Bank0Count = bmc_report[cpld_hdd_amount];
+    uint8_t u8LocalSlot;
+    uint8_t u8TgtMux;
+    uint8_t u8TgtCh;
+    uint8_t m;
+
+    if (s_mctpBus != 1U)
+        return;                               /* only meaningful on UI2C0 */
+
+    if (u8Bank0Count == 0xFFU)
+        u8Bank0Count = 0U;
+    u8LocalSlot = (uint8_t)(u8SlotIndex - u8Bank0Count);
+    u8TgtMux    = u8LocalSlot / u8ChannelsPerMux;
+    u8TgtCh     = u8LocalSlot % u8ChannelsPerMux;
+
+    for (m = 0U; m < u8MuxCount; m++)
+    {
+        uint8_t u8MuxAddr = (mux_TCA9548_flag == 0) ? s_au8_PCA9848_Addr[m]
+                                                    : s_au8_TCA9548_Addr[m];
+        /* Probe each mux on the channel the target slot would use (or ch0 for
+         * the non-target muxes) so the readback is meaningful everywhere. */
+        uint8_t u8Ch     = (m == u8TgtMux) ? u8TgtCh : 0U;
+        uint8_t u8CtlExp = (uint8_t)(1U << u8Ch);
+        uint8_t u8Ack;
+        uint8_t u8CtlRead;
+
+        /* DisableMux_1 / SelectMuxChannel_1 already insert the UI2C0 bus-idle
+         * delay internally; only the raw UI2C_ReadByte readback needs its own. */
+        DisableMux_1(UI2C0, u8MuxAddr);
+        u8Ack = SelectMuxChannel_1(UI2C0, u8MuxAddr, u8Ch);
+        CLK_SysTickDelay(500);
+        u8CtlRead = UI2C_ReadByte(UI2C0, u8MuxAddr);
+
+        printf("[UI2C0 MUX] mux=0x%02X ch=%u ack=%u ctlExp=0x%02X ctlRead=0x%02X tgt=%u\r\n",
+               (unsigned)u8MuxAddr, (unsigned)u8Ch, (unsigned)u8Ack,
+               (unsigned)u8CtlExp, (unsigned)u8CtlRead,
+               (unsigned)((m == u8TgtMux) ? 1U : 0U));
+    }
+
+    /* The scan loop leaves several muxes with channel 0 enabled at once, which
+     * would put more than one branch on the bus during the following
+     * mctp_tx_message(). Restore the clean single-path routing that
+     * SelectNvmeSlotChannel() originally set: disable every mux, then enable
+     * only the target mux/channel for the requested slot. */
+    {
+        uint8_t u8RestoreCount = (mux_TCA9548_flag == 0) ? u8MuxCount : 1U;
+        uint8_t r;
+
+        for (r = 0U; r < u8RestoreCount; r++)
+        {
+            uint8_t u8Addr = (mux_TCA9548_flag == 0) ? s_au8_PCA9848_Addr[r]
+                                                     : s_au8_TCA9548_Addr[r];
+            DisableMux_1(UI2C0, u8Addr);
+        }
+
+        if (u8TgtMux < u8MuxCount)
+        {
+            uint8_t u8TgtAddr = (mux_TCA9548_flag == 0) ? s_au8_PCA9848_Addr[u8TgtMux]
+                                                        : s_au8_TCA9548_Addr[u8TgtMux];
+            (void)SelectMuxChannel_1(UI2C0, u8TgtAddr, u8TgtCh);
+        }
+    }
+}
+#endif
+
 
 /**
  * @brief Execute one native NVMe-MI command against the drive in a slot.
@@ -1344,6 +1677,13 @@ int32_t nvme_mi_native_cmd(uint8_t u8SlotIndex, uint8_t u8Opcode,
         return -100;
     }
 
+#if NVME_UI2C0_DEBUG
+    /* Isolate the mux / master path from the MCTP slave-receive path: read the
+     * mux control register back and probe the drive before sending the MCTP
+     * request.  See nvme_ui2c0_mux_selftest() for how to read the output. */
+    nvme_ui2c0_mux_selftest(u8SlotIndex);
+#endif
+
     /* The USB command dispatcher in main.c runs this handler inside a critical
      * section with PRIMASK=1 (all interrupts masked). The MCTP response from
      * the drive is received via the I2C1 slave interrupt, which cannot fire
@@ -1403,9 +1743,12 @@ static int32_t nvme_mi_admin_xfer(uint8_t *pMsg, uint8_t *pResp, uint16_t maxLen
     pMsg[71] = (uint8_t)((mic >> 24) & 0xFF);
 
     mctp_bus_prepare();
-    mctp_tx_message(pMsg, 72);
-    mctp_bus_listen();
-    ret = mctp_rx_message(pResp, maxLen, pRespLen);
+    ret = mctp_tx_message(pMsg, 72);
+    if (ret == 0)
+    {
+        mctp_bus_listen();
+        ret = mctp_rx_message(pResp, maxLen, pRespLen);
+    }
     mctp_bus_end();
     return ret;
 }
@@ -1591,6 +1934,13 @@ int32_t nvme_mi_mctp_ctrl_cmd(uint8_t u8SlotIndex, uint8_t u8CmdCode,
         return -100;
     }
 
+#if NVME_UI2C0_DEBUG
+    /* Isolate the mux / master path from the MCTP slave-receive path: read the
+     * mux control register back and probe the drive before sending the MCTP
+     * request.  See nvme_ui2c0_mux_selftest() for how to read the output. */
+    nvme_ui2c0_mux_selftest(u8SlotIndex);
+#endif
+
     /* The 0xE0 dispatcher runs with PRIMASK=1; unmask interrupts around the
      * MCTP exchange so the I2C1 slave interrupt can receive the response, then
      * restore the caller's PRIMASK (see nvme_mi_native_cmd for details). A
@@ -1601,9 +1951,12 @@ int32_t nvme_mi_mctp_ctrl_cmd(uint8_t u8SlotIndex, uint8_t u8CmdCode,
         __set_PRIMASK(0);
 
         mctp_bus_prepare();
-        mctp_tx_message(msg, (uint16_t)sizeof(msg));
-        mctp_bus_listen();
-        ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        ret = mctp_tx_message(msg, (uint16_t)sizeof(msg));
+        if (ret == 0)
+        {
+            mctp_bus_listen();
+            ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        }
         mctp_bus_end();
 
         __set_PRIMASK(u32PriMask);
@@ -1820,9 +2173,12 @@ int32_t nvme_mi_native_write_cmd(uint8_t u8SlotIndex, uint8_t u8Opcode,
         __set_PRIMASK(0);
 
         mctp_bus_prepare();
-        mctp_tx_message(msg, msgLen);
-        mctp_bus_listen();
-        ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        ret = mctp_tx_message(msg, msgLen);
+        if (ret == 0)
+        {
+            mctp_bus_listen();
+            ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        }
         mctp_bus_end();
 
         __set_PRIMASK(u32PriMask);
@@ -1925,12 +2281,14 @@ int32_t nvme_mi_admin_format_nvm(uint8_t u8SlotIndex, uint32_t u32Nsid,
         __set_PRIMASK(0);
 
         mctp_bus_prepare();
-        mctp_tx_message(msg, 72);
-        mctp_bus_listen();
-
-        ret = -2;
-        for (retry = 0U; (retry < 20U) && (ret == -2); retry++)
-            ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        ret = mctp_tx_message(msg, 72);
+        if (ret == 0)
+        {
+            mctp_bus_listen();
+            ret = -2;                     /* Retry RX timeout only, never TX. */
+            for (retry = 0U; (retry < 20U) && (ret == -2); retry++)
+                ret = mctp_rx_message(resp, (uint16_t)sizeof(resp), &rlen);
+        }
 
         mctp_bus_end();
 
