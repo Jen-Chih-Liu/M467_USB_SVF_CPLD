@@ -1,0 +1,80 @@
+# ==============================================================================
+# NKFun-AES67-M467SJHAN (open_aes67) .gitignore
+# ==============================================================================
+
+# --- OS & Editor / IDE ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
+*~
+
+# --- Node.js / Frontend (tools/aes67-monitor) ---
+node_modules/
+tools/aes67-monitor/dist/
+release-builds/
+.env.local
+.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Python / Pytest ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# --- Host C/C++ Build & Test Artifacts (src/, tests/) ---
+build/
+cmake-build-*/
+*.o
+*.obj
+*.d
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+*.gcov
+*.gcda
+*.gcno
+
+# --- Keil MDK / ARM Firmware Build Artifacts (fw/) ---
+fw/**/obj/
+fw/**/lst/
+fw/**/Objects/
+fw/**/Listings/
+fw/**/DebugConfig/
+fw/**/RTE/
+*.uvguix.*
+*.build_log.htm
+*.axf
+*.elf
+*.hex
+*.map
+*.lnp
+*.crf
+*.dep
+*.iex
+*.lst
+JLinkLog.txt
+
+# --- Logs & Temp Files ---
+*.log
+*.tmp
+*.bak

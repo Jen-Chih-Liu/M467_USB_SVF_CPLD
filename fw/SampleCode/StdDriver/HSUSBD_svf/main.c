@@ -154,6 +154,7 @@ void SYS_Init(void)
 
     SET_EADC0_CH7_PB7();
     GPIO_DISABLE_DIGITAL_PATH(PB, BIT7);
+    //SYS_SetVRef(SYS_VREFCTL_VREF_PIN);
     /* Lock protected registers */
 
     SystemCoreClockUpdate();
@@ -657,6 +658,21 @@ static void DWT_ProfileInit(void)
  * @param  None
  * @return N/A
  */
+static uint8_t ver_adc_to_level(uint32_t adc_code)
+{
+    static const uint16_t adc_midpoint_code[] = {
+        600U, 1013U, 1445U, 1853U, 2253U, 2675U, 3076U, 3476U, 3894U
+    };
+
+    for (uint8_t level = 0U; level < sizeof(adc_midpoint_code) / sizeof(adc_midpoint_code[0]); ++level)
+    {
+        if (adc_code < adc_midpoint_code[level])
+            return (uint8_t)(9U - level);
+    }
+
+    return 0U;
+}
+
 int main(void)
 {
     int i;
@@ -980,7 +996,7 @@ cpld1_init:
 
     while (g_u32AdcIntFlag == 0);
 
-    unsigned int adc_val = EADC_GET_CONV_DATA(EADC0, 0);
+    const uint8_t ver_adc_level = ver_adc_to_level(EADC_GET_CONV_DATA(EADC0, 0));
     NVIC_DisableIRQ(EADC00_IRQn);
     EADC_Close(EADC0);
 
@@ -1228,7 +1244,7 @@ cpld1_init:
             {
                 response_buff[0] = 0x26;
                 response_buff[1] = 0x11;
-                response_buff[2] = 0x03;
+                response_buff[2] = 0x18;
                 response_buff[3] = 0x01;
 
                 // Prepare and send the version number response.
@@ -1318,7 +1334,20 @@ cpld1_init:
                 HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
             }
 
+            if (usb_rcvbuf[0] == 0xB4)
+            {
+                memset(response_buff, 0, sizeof(response_buff));
+                response_buff[0] = 0xB4;
+                response_buff[1] = ver_adc_level;
 
+                for (i = 0; i < 1024; i++)
+                {
+                    HSUSBD->EP[EPA].EPDAT_BYTE = response_buff[i];
+                }
+
+                HSUSBD->EP[EPA].EPTXCNT = 1024;
+                HSUSBD_ENABLE_EP_INT(EPA, HSUSBD_EPINTEN_INTKIEN_Msk);
+            }
 #endif
 
             // Command 0xc0: Read all BMC report data.

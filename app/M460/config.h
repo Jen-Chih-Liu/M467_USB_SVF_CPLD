@@ -106,7 +106,9 @@ extern int usbd_multi_nvme_mi_cmd(unsigned char usb_cnt, unsigned char nvme_inde
 
 extern int usb_read_multi_bmc(unsigned char usb_cnt, M463_BoardData_t* pBoardData);
 extern float show_temperature(uint8_t h_bytem, uint8_t l_byte);
+#define USB_CMD_VER_ADC 0xB4U
 extern int usb_read_multi_mcu_version(unsigned char usb_cnt, unsigned int* pMCUVERSIONData);
+extern int usb_read_multi_ver_adc(unsigned char usb_cnt, uint8_t* level);
 extern int usb_multi_mcu_reset(unsigned char usb_cnt);
 extern int usbd_multi_cpld_i2c_get(unsigned char usb_cnt, unsigned char i2c_reg, unsigned char i2c_len, unsigned char* i2c_array);
 extern int usbd_multi_cpld_i2c_set(unsigned char usb_cnt, unsigned char i2c_reg, unsigned char i2c_data);

@@ -294,28 +294,21 @@ int send_string_hid_interrupt(libusb_device_handle* handle, uint8_t ep_out, cons
  * @param out_version Output pointer for the version.
  * @return int 0 on success, -1 on failure.
  */
-int read_device_version(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in, uint32_t* out_version) {
+static int read_device_version(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep_in,
+                               uint8_t command, uint32_t* out_version) {
     // Prepare and send the command
     int actual_length = 0;
-    char cmd_version[PACKET_SIZE] = { 0 };
-    cmd_version[0] = (char)0xb0; // read version command prefix
+    unsigned char cmd_version[PACKET_SIZE] = { 0 };
+    cmd_version[0] = command;
 
 
     // Perform interrupt transfer to send command
-    int r = libusb_interrupt_transfer(handle, ep_out, (unsigned char*)cmd_version, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
+    int r = libusb_interrupt_transfer(handle, ep_out, cmd_version, PACKET_SIZE, &actual_length, 0); // 0 = no timeout
     if (r < 0) {
         fprintf(stderr, "Error sending data: %s\n", libusb_error_name(r));
         return -1; // [Modified] Send failed -> return -1
     }
 
-#if 0
-    cmd_version[0] = 0xb0; // read version command
-
-    if (send_string_hid_interrupt(handle, ep_out, cmd_version) != 0) {
-        fprintf(stderr, "Failed to send read version command.\n");
-        return -1; // [Modified] Send failed -> return -1
-    }
-#endif
     // Prepare the receive buffer
     unsigned char in_data[transfer_size] = { 0 };
 
@@ -326,6 +319,15 @@ int read_device_version(libusb_device_handle* handle, uint8_t ep_out, uint8_t ep
     if (r_in != 0) {
         fprintf(stderr, "Error reading version from device: %s\n", libusb_error_name(r_in));
         return -1; // [Modified] Read failed -> return -1
+    }
+
+    if (command == USB_CMD_VER_ADC) {
+        if (actual_length < 2 || in_data[0] != command || in_data[1] > 0x09U) {
+            fprintf(stderr, "Invalid VER_ADC response.\n");
+            return -1;
+        }
+        *out_version = in_data[1];
+        return 0;
     }
 
     // Check if the returned data length is sufficient
@@ -1068,7 +1070,7 @@ int usb_read_multi_bmc_cpld1(unsigned char usb_cnt, M463_BoardData_t* pBoardData
  * @param pMCUVERSIONData Output pointer for version.
  * @return int 0 on success, 1 on failure.
  */
-int usb_read_multi_mcu_version(unsigned char usb_cnt, unsigned int* pMCUVERSIONData)
+static int usb_read_multi_version(unsigned char usb_cnt, uint8_t command, uint32_t* version)
 {
     libusb_context* ctx = NULL;
     libusb_device** devs;
@@ -1089,14 +1091,11 @@ int usb_read_multi_mcu_version(unsigned char usb_cnt, unsigned int* pMCUVERSIOND
 
     libusb_free_device_list(devs, 1);
 
-    if (g_device_count == 0)
-        return 1;
     r = -1;
     if (g_device_count > usb_cnt)
     {
         if (open_specific_device_and_endpoints(MyDeviceMap[usb_cnt].device, &handle, &ep_out, &ep_in) == 0) {
-            // Perform MCU version read
-            r = read_device_version(handle, ep_out, ep_in, (uint32_t*)pMCUVERSIONData);
+            r = read_device_version(handle, ep_out, ep_in, command, version);
             libusb_release_interface(handle, INTERFACE_NUMBER);
             libusb_close(handle);
         }
@@ -1106,6 +1105,22 @@ int usb_read_multi_mcu_version(unsigned char usb_cnt, unsigned int* pMCUVERSIOND
 
     libusb_exit(ctx);
     return (r == 0) ? 0 : 1;
+}
+
+int usb_read_multi_mcu_version(unsigned char usb_cnt, unsigned int* pMCUVERSIONData)
+{
+    return usb_read_multi_version(usb_cnt, 0xB0U, (uint32_t*)pMCUVERSIONData);
+}
+
+int usb_read_multi_ver_adc(unsigned char usb_cnt, uint8_t* level)
+{
+    uint32_t value;
+
+    if (usb_read_multi_version(usb_cnt, USB_CMD_VER_ADC, &value) != 0)
+        return 1;
+
+    *level = (uint8_t)value;
+    return 0;
 }
 
 

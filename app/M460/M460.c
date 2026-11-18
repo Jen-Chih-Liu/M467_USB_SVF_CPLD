@@ -1604,16 +1604,25 @@ int handle_update(int count, int argc, char* argv[]) {
  */
 int handle_version(int count, int argc, char* argv[]) {
     // M463 <Count> Version <MCU>
-    cmd_printf("[CMD] Count=%d, Action=Read MCU Version\n", count);
-    
     // Validate arguments
     if (argc < 2) {
-        printf("[Error] Usage: Version <Target> (e.g., MCU)\n");
+        printf("[Error] Usage: Version <MCU | VER_ADC>\n");
         return -1;
+    }
+
+    if (STR_EQUAL(argv[1], "VER_ADC")) {
+        uint8_t level;
+        if (count < 0 || count > UINT8_MAX || usb_read_multi_ver_adc((unsigned char)count, &level) != 0) {
+            dbg_printf("[Error] Failed to read VER_ADC for USB index %d\n", count);
+            return -1;
+        }
+        json_printf("{\"VER_ADC\": \"0x%02X\"}\n", (unsigned int)level);
+        return 0;
     }
 
     // 2. Check if Target is MCU
     if (STR_EQUAL(argv[1], "MCU")) {
+        cmd_printf("[CMD] Count=%d, Action=Read MCU Version\n", count);
         uint32_t mcu_version = 0;
         if (usb_read_multi_mcu_version(count, &mcu_version) != 0)
         {
@@ -3271,7 +3280,7 @@ cmd_entry_t cmd_table[] = {
     {"CPLD",      handle_cpld,       "CPLD Id / Version / Get / Set"},
     {"HDD",       handle_hdd,        "HDD Info / Port / LED / Temp / NVMe-Mi"},
     {"NVMEMI",    handle_nvmemi,     "NVMEMI <CommandID 1..19> <NVMEIndex> [Dword0] [Dword1]"},
-    {"Update",    handle_update,     "Update <M463/CPLD>"},    {"Version",   handle_version,    "Version <MCU>"},
+    {"Update",    handle_update,     "Update <M463/CPLD>"},    {"Version",   handle_version,    "Version <MCU | VER_ADC>"},
     {"BPB",       handle_bpb,        "BPB Sensor Get"},
     {"Reset",     handle_reset,      "Reset system"},
     {"I2CBYPASS", handle_i2c_bypass, "I2C0 Bypass <Cmd>"},

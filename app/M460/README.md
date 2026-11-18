@@ -114,7 +114,7 @@ stdout 可能先出現 `[CMD]`、`updated usb table, ...` 等診斷文字，再�
 | `HDD` | `Info`、`Port Status`、`LED Status`、`Temp`；`NVMe-Mi` 僅提示 |
 | `NVMEMI` | 單槽 CommandID 操作，詳見第 5 節 |
 | `Update` | `M463` 或 `CPLD` 加輸入檔 |
-| `Version` | `MCU` |
+| `Version` | `MCU`、`VER_ADC` |
 | `BPB` | `Sensor Get` |
 | `Reset` | 單獨重置、`Setval`、`Getval` |
 | `I2CBYPASS`、`I2CBYPASS1` | I2C0／I2C2 的 `Get`、`Set` |
@@ -133,6 +133,7 @@ stdout 可能先出現 `[CMD]`、`updated usb table, ...` 等診斷文字，再�
 .\M460.exe 0 usblist
 .\M460.exe 0 appver
 .\M460.exe 0 Version MCU
+.\M460.exe 0 Version VER_ADC
 .\M460.exe 0 CPLD Id
 .\M460.exe 0 CPLD Version
 .\M460.exe 0 CPLD Get 0x30 1
@@ -151,6 +152,7 @@ stdout 可能先出現 `[CMD]`、`updated usb table, ...` 等診斷文字，再�
 
 - `usblist` 產生 `USBCount`、`USB0` 等 Bus／Port 字串，沒有序號欄位。
 - `Version MCU` 的 `MCU_Version` 是讀回 32 位元值右移 8 位後的十六進位字串。
+- `Version VER_ADC` 查詢開機取樣的硬體版本階層，回傳 `{"VER_ADC": "0x09"}` 之類的 JSON；值為 `0x09`（最低）至 `0x00`（最高／浮接），不是電壓值。
 - `CPLD Id/Version` 可附第二顆的 `CPLD1_ID/CPLD1_Version`；以第二報表版本非 0／FF 判斷。
 - `CPLD Get <reg> <len>`：暫存器以十六進位解析；長度十進位，已檢查 1..32。
 - `CPLD Set <reg> <value>`：兩者十六進位，經一位元組介面傳送；屬硬體寫入。
